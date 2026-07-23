@@ -3,8 +3,8 @@
 [![CI](https://github.com/sergii-ziborov/weavatrix-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/sergii-ziborov/weavatrix-scan/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/weavatrix-scan.svg)](https://crates.io/crates/weavatrix-scan)
 [![docs.rs](https://docs.rs/weavatrix-scan/badge.svg)](https://docs.rs/weavatrix-scan)
-[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](Cargo.toml)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/sergii-ziborov/weavatrix-scan/blob/main/LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/sergii-ziborov/weavatrix-scan/blob/main/Cargo.toml)
 
 `weavatrix-scan` is a deterministic, read-only repository scanner for static
 analysis, code intelligence, indexing, and AI tooling.

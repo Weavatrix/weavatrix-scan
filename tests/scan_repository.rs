@@ -111,8 +111,13 @@ fn parallel_content_inspection_matches_serial_output() {
         .options(base.with_parallelism(4))
         .scan()
         .unwrap();
+    let automatic = Scanner::new(&fixture.root)
+        .options(ScanOptions::default().with_extensions(["rs"]))
+        .scan()
+        .unwrap();
 
     assert_eq!(serial, parallel);
+    assert_eq!(serial, automatic);
 }
 
 #[test]
