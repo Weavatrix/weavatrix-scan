@@ -308,20 +308,20 @@ Sample result on Windows 11, Rust 1.97.1, warm filesystem cache:
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 12.6 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 11.6 ms |
-| Raw paths | ignore | 6,004 | 16.0 ms |
-| Raw paths | walkdir | 6,004 | 13.2 ms |
-| Raw paths | jwalk | 6,004 | 10.0 ms |
-| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 24.7 ms |
-| Ignore-aware manifest | ignore | 6,001 | 27.7 ms |
-| Rich manifest | weavatrix `Scanner` | 6,000 | 90.1 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 7.8 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 5.1 ms |
+| Raw paths | ignore | 6,004 | 9.9 ms |
+| Raw paths | walkdir | 6,004 | 9.9 ms |
+| Raw paths | jwalk | 6,004 | 7.6 ms |
+| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 24.1 ms |
+| Ignore-aware manifest | ignore | 6,001 | 31.7 ms |
+| Rich manifest | weavatrix `Scanner` | 6,000 | 91.3 ms |
 
 This is the median of three independent output-equivalent Windows benchmark
 processes; each process itself reports the median of 11 interleaved samples
 after two warmups. `Walker` and `ParallelWalker` beat `walkdir` on this corpus.
-`jwalk` remains the narrow raw-parallel winner, while the selected-manifest
-`Scanner` is about 11% faster than `ignore`. The comparable scanner row omits
+`ParallelWalker` is about 34% faster than `jwalk`, while the selected-manifest
+`Scanner` is about 24% faster than `ignore`. The comparable scanner row omits
 skip evidence on both sides. The rich row additionally records typed evidence,
 reads content, detects binaries, hashes sources, and computes a deterministic
 revision.
@@ -334,6 +334,8 @@ Source review explains the remaining differences:
   matchers;
 - Weavatrix `Walker` streams iterative DFS, bounds live handles and buffers the
   oldest remaining frame only when `max_open` is reached;
+- Weavatrix `ParallelWalker` keeps round-robin directory balancing but restores
+  discovery-task order independently of worker completion;
 - Weavatrix `Scanner` reuses inherited rules, indexes exact literals,
   specializes prefix/suffix globs, prefilters complex patterns, and sorts only
   the final report.

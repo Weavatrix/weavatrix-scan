@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+- Preserve parallel discovery-task order independently of worker completion
+  while retaining round-robin load balancing.
+- Replace the serialized idle-worker receiver with a condition-variable job
+  queue so all bounded workers can wait and wake independently.
+- Add regression coverage for completion-order independence and reduce the
+  normalized parallel discovery benchmark below `jwalk` on the Windows sample.
+
 ## 0.1.1 - 2026-07-23
 
 - Add iterative, lossless `Walker` and bounded `ParallelWalker` APIs.

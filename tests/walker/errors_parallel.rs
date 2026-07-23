@@ -82,3 +82,40 @@ fn parallel_walker_matches_serial_paths_on_a_wide_tree() {
         .collect::<BTreeSet<_>>();
     assert_eq!(serial, parallel);
 }
+
+#[test]
+fn parallel_report_order_does_not_depend_on_worker_completion() {
+    let fixture = Fixture::new("weavatrix-parallel-order");
+    for file in 0..400 {
+        fixture.write(&format!("module_00/file_{file:03}.rs"), "fn run() {}\n");
+    }
+    for directory in 1..8 {
+        fixture.write(&format!("module_{directory:02}/file.rs"), "fn run() {}\n");
+    }
+
+    let report = ParallelWalker::new(&fixture.root)
+        .with_parallelism(4)
+        .walk()
+        .unwrap();
+    let top_level = report
+        .entries
+        .iter()
+        .filter(|entry| entry.depth() == 1 && entry.is_dir())
+        .map(|entry| entry.file_name().to_os_string())
+        .collect::<Vec<_>>();
+    let mut descendant_groups = Vec::new();
+    for entry in report.entries.iter().filter(|entry| entry.depth() > 1) {
+        let group = entry
+            .relative_path()
+            .components()
+            .next()
+            .expect("descendant has a top-level component")
+            .as_os_str()
+            .to_os_string();
+        if descendant_groups.last() != Some(&group) {
+            descendant_groups.push(group);
+        }
+    }
+
+    assert_eq!(top_level, descendant_groups);
+}
