@@ -18,6 +18,7 @@ pub(crate) struct PlatformDirectoryInfo {
 }
 
 #[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // Windows identity lookup is genuinely fallible.
 pub(crate) fn directory_info(
     _canonical: &Path,
     metadata: &Metadata,

@@ -249,7 +249,7 @@ fn deep_tree_selection_matches_ignore_without_recursive_traversal() {
     assert_eq!(ours_files, ignore_crate_files(&fixture.root, &["rs"]));
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_paths_and_symlink_loops_have_lossless_differential_evidence() {
     use std::ffi::OsString;
