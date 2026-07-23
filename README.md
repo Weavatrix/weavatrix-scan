@@ -212,7 +212,7 @@ Run the competitor comparison:
 cargo bench --locked --bench compare_competitors
 ```
 
-Run exact-count parity on a real repository:
+Run exact selected-path parity on a real repository:
 
 ```powershell
 $env:WEAVATRIX_BENCH_ROOT = "C:\path\to\repository"
@@ -221,25 +221,50 @@ cargo bench --locked --bench real_repository
 
 The synthetic comparison uses 6,000 source files across Rust, Go, and
 TypeScript. It runs two warmups and 11 interleaved measured samples, then
-reports the median. Every competitor must return the same file count in each
-comparable mode.
+reports the median. Comparable walkers must produce the same fully sorted
+manifest of normalized relative paths and byte sizes, not merely the same
+count.
 
 Sample result on Windows 11, Rust 1.97.1, warm filesystem cache:
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw discovery | weavatrix-scan | 6,004 | 19.1 ms |
-| Raw discovery | ignore | 6,004 | 7.8 ms |
-| Raw discovery | walkdir | 6,004 | 8.6 ms |
-| Raw discovery | jwalk | 6,004 | 5.5 ms |
-| Ignore-aware discovery | weavatrix-scan | 6,001 | 32.2 ms |
-| Ignore-aware discovery | ignore | 6,001 | 32.5 ms |
-| Rich manifest | weavatrix-scan | 6,000 | 150.0 ms |
+| Raw manifest | weavatrix-scan | 6,004 | 14.4 ms |
+| Raw manifest | ignore | 6,004 | 12.0 ms |
+| Raw manifest | walkdir | 6,004 | 11.3 ms |
+| Raw manifest | jwalk | 6,004 | 134.3 ms |
+| Ignore-aware manifest | weavatrix-scan | 6,001 | 20.4 ms |
+| Ignore-aware manifest | ignore | 6,001 | 28.4 ms |
+| Rich manifest | weavatrix-scan | 6,000 | 69.3 ms |
 
-The raw row is deliberately honest: `jwalk` is the fastest choice when sorted
-paths are the whole requirement. The rich-manifest row has no direct equivalent
-in those walkers; it additionally reads, validates, hashes, sorts, and records
-evidence for all selected files.
+This is an output-equivalent Windows manifest benchmark. `jwalk` parallelizes
+directory reads very effectively, but its per-entry metadata path is expensive
+on this Windows corpus; it remains a strong choice for path-only traversal and
+this table must not be used to claim otherwise. The rich-manifest row has no
+direct equivalent in the walkers: it also reads content, detects binaries,
+hashes sources, records typed evidence, and computes a deterministic revision.
+
+Source review explains the remaining differences:
+
+- `walkdir` streams unsorted directory entries and bounds open descriptors;
+- `jwalk` schedules `read_dir` work through Rayon and restores ordered output;
+- `ignore` compiles patterns into `GlobSet` matchers and shares inherited
+  matchers;
+- Weavatrix Scan now streams the no-ignore fast path, reuses inherited rules,
+  indexes exact literals, specializes prefix/suffix globs, prefilters complex
+  patterns, and sorts only the final report.
+
+Exact-path real-repository sample:
+
+| Repository | Files | weavatrix-scan | ignore |
+| --- | ---: | ---: | ---: |
+| radiochron (Rust) | 86 | 14.3 ms | 25.3 ms |
+| grpc-server (Go) | 29 | 4.6 ms | 7.9 ms |
+| bgp-speaker (Go) | 29 | 4.3 ms | 7.0 ms |
+| controller-rest-api (JS) | 1,085 | 28.4 ms | 37.7 ms |
+| frontend (TS) | 1,689 | 31.4 ms | 45.6 ms |
+| analytics | 361 | 23.5 ms | 39.9 ms |
+| automation (Python) | 1,670 | 16.3 ms | 18.2 ms |
 
 Timing varies by filesystem, cache, antivirus, and CPU. Treat the table as a
 reproducible sample, not a universal constant.
@@ -255,9 +280,9 @@ The test suite covers:
 - serial/parallel content-inspection equivalence;
 - optional Serde support.
 
-The real-repository benchmark currently confirms equal ignore-aware selected
-counts against `ignore` on `radiochron`, `weavatrix-graph`, Weavatrix, and
-Analytics fixtures used during development.
+The real-repository benchmark compares the complete normalized selected-path
+set against `ignore`. Its comparison policy disables Weavatrix's file-size cap
+so an oversized file cannot masquerade as an ignore-rule mismatch.
 
 ## Development
 

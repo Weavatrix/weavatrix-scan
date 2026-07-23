@@ -1,7 +1,7 @@
 use crate::config::ScanOptions;
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
-use crate::ignore::{IgnoreRule, load_ignore_file, skip_ignored};
+use crate::ignore::{IgnoreRules, load_ignore_file, skip_ignored};
 use crate::path::RevisionHasher;
 use crate::report::{ScanReport, ScannedFile, SkipKind};
 use std::ffi::OsStr;
@@ -58,16 +58,23 @@ fn scan_repository_with_options(root: &Path, options: &ScanOptions) -> Result<Sc
     }
 
     let mut report = ScanReport::new(canonical.clone());
-    walk_directory(&canonical, &canonical, "", &[], options, &mut report)?;
+    walk_directory(
+        &canonical,
+        &canonical,
+        "",
+        &IgnoreRules::default(),
+        options,
+        &mut report,
+    )?;
     let inspected = inspect_files(std::mem::take(&mut report.files), options)?;
     report.files = inspected.files;
     report.skipped.extend(inspected.skipped);
     report
         .files
-        .sort_by(|left, right| left.relative.cmp(&right.relative));
+        .sort_unstable_by(|left, right| left.relative.cmp(&right.relative));
     report
         .skipped
-        .sort_by(|left, right| left.relative.cmp(&right.relative));
+        .sort_unstable_by(|left, right| left.relative.cmp(&right.relative));
     report.revision = revision_for(&report.files);
     Ok(report)
 }
@@ -76,23 +83,54 @@ fn walk_directory(
     root: &Path,
     directory: &Path,
     relative_directory: &str,
-    inherited_rules: &[IgnoreRule],
+    inherited_rules: &IgnoreRules,
     options: &ScanOptions,
     report: &mut ScanReport,
 ) -> Result<()> {
-    let mut entries = fs::read_dir(directory)
-        .map_err(|source| Error::io(directory, source))?
+    let read_dir = fs::read_dir(directory).map_err(|source| Error::io(directory, source))?;
+    if options.ignore_files.is_empty() {
+        for entry in read_dir {
+            let entry = entry.map_err(|source| Error::io(directory, source))?;
+            process_entry(
+                &entry,
+                root,
+                relative_directory,
+                inherited_rules,
+                options,
+                report,
+            )?;
+        }
+        return Ok(());
+    }
+    let entries = read_dir
         .collect::<std::io::Result<Vec<_>>>()
         .map_err(|source| Error::io(directory, source))?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    let mut rules = inherited_rules.to_vec();
-    for ignore_name in &options.ignore_files {
-        if let Some(entry) = entries
-            .iter()
-            .find(|entry| entry.file_name() == OsStr::new(ignore_name))
-        {
-            load_ignore_file(&entry.path(), relative_directory, &mut rules, report);
+    let ignore_paths = options
+        .ignore_files
+        .iter()
+        .filter_map(|ignore_name| {
+            entries
+                .iter()
+                .find(|entry| entry.file_name() == OsStr::new(ignore_name))
+                .map(std::fs::DirEntry::path)
+        })
+        .collect::<Vec<_>>();
+    if ignore_paths.is_empty() {
+        for entry in entries {
+            process_entry(
+                &entry,
+                root,
+                relative_directory,
+                inherited_rules,
+                options,
+                report,
+            )?;
         }
+        return Ok(());
+    }
+    let mut rules = inherited_rules.clone();
+    for ignore_path in ignore_paths {
+        load_ignore_file(&ignore_path, relative_directory, &mut rules, report);
     }
 
     for entry in entries {
@@ -105,7 +143,7 @@ fn process_entry(
     entry: &fs::DirEntry,
     root: &Path,
     relative_directory: &str,
-    rules: &[IgnoreRule],
+    rules: &IgnoreRules,
     options: &ScanOptions,
     report: &mut ScanReport,
 ) -> Result<()> {
@@ -132,7 +170,7 @@ fn process_directory(
     entry: &fs::DirEntry,
     root: &Path,
     relative: &str,
-    rules: &[IgnoreRule],
+    rules: &IgnoreRules,
     options: &ScanOptions,
     report: &mut ScanReport,
 ) -> Result<()> {

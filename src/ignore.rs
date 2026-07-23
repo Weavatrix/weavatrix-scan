@@ -1,6 +1,10 @@
-use crate::glob;
 use crate::report::{ScanReport, SkipKind};
+use std::collections::HashMap;
 use std::path::Path;
+
+mod matcher;
+
+use matcher::RuleMatcher;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IgnoreFile {
@@ -14,7 +18,39 @@ pub(crate) struct IgnoreRule {
     action: RuleAction,
     target: RuleTarget,
     scope: RuleScope,
-    literal: bool,
+    matcher: RuleMatcher,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct IgnoreRules {
+    rules: Vec<IgnoreRule>,
+    exact_anywhere: HashMap<String, Vec<usize>>,
+    complex: Vec<usize>,
+}
+
+impl IgnoreRules {
+    fn push(&mut self, rule: IgnoreRule) {
+        let index = self.rules.len();
+        if rule.scope == RuleScope::Anywhere && rule.matcher.is_literal() {
+            self.exact_anywhere
+                .entry(rule.pattern.clone())
+                .or_default()
+                .push(index);
+        } else {
+            self.complex.push(index);
+        }
+        self.rules.push(rule);
+    }
+}
+
+impl FromIterator<IgnoreRule> for IgnoreRules {
+    fn from_iter<T: IntoIterator<Item = IgnoreRule>>(iter: T) -> Self {
+        let mut rules = Self::default();
+        for rule in iter {
+            rules.push(rule);
+        }
+        rules
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,18 +95,14 @@ impl IgnoreRule {
     }
 
     fn matches_value(&self, value: &str) -> bool {
-        if self.literal {
-            self.pattern == value
-        } else {
-            glob::matches(&self.pattern, value)
-        }
+        self.matcher.matches(&self.pattern, value)
     }
 }
 
 pub(crate) fn load_ignore_file(
     path: &Path,
     base: &str,
-    rules: &mut Vec<IgnoreRule>,
+    rules: &mut IgnoreRules,
     report: &mut ScanReport,
 ) {
     let text = match std::fs::read_to_string(path) {
@@ -91,21 +123,36 @@ pub(crate) fn load_ignore_file(
     }
 }
 
-pub(crate) fn is_ignored(path: &str, is_directory: bool, rules: &[IgnoreRule]) -> bool {
-    let mut ignored = false;
-    for rule in rules {
-        if rule.matches(path, is_directory) {
-            ignored = rule.action == RuleAction::Ignore;
+pub(crate) fn is_ignored(path: &str, is_directory: bool, rules: &IgnoreRules) -> bool {
+    let mut best = None;
+    for component in path.split('/') {
+        let Some(indices) = rules.exact_anywhere.get(component) else {
+            continue;
+        };
+        if let Some(&index) = indices
+            .iter()
+            .rev()
+            .find(|&&index| rules.rules[index].matches(path, is_directory))
+        {
+            best = Some(best.map_or(index, |current: usize| current.max(index)));
         }
     }
-    ignored
+    for &index in rules.complex.iter().rev() {
+        if best.is_some_and(|best| index <= best) {
+            break;
+        }
+        if rules.rules[index].matches(path, is_directory) {
+            return rules.rules[index].action == RuleAction::Ignore;
+        }
+    }
+    best.is_some_and(|index| rules.rules[index].action == RuleAction::Ignore)
 }
 
 pub(crate) fn skip_ignored(
     report: &mut ScanReport,
     relative: &str,
     is_directory: bool,
-    rules: &[IgnoreRule],
+    rules: &IgnoreRules,
 ) -> bool {
     let ignored = is_ignored(relative, is_directory, rules);
     if ignored {
@@ -151,9 +198,7 @@ fn parse_rule(raw: &str, base: &str) -> Option<IgnoreRule> {
     };
     Some(IgnoreRule {
         base: base.to_owned(),
-        literal: !line
-            .bytes()
-            .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b'\\')),
+        matcher: RuleMatcher::new(&line),
         pattern: line,
         action: if negated {
             RuleAction::Include
@@ -171,7 +216,9 @@ fn candidate_for_base<'a>(repository_path: &'a str, base: &str) -> Option<&'a st
     } else if repository_path == base {
         Some("")
     } else {
-        repository_path.strip_prefix(&(base.to_owned() + "/"))
+        repository_path
+            .strip_prefix(base)
+            .and_then(|candidate| candidate.strip_prefix('/'))
     }
 }
 
@@ -184,13 +231,9 @@ fn path_or_ancestor_matches(
     if rule.matches_value(candidate) && (target != RuleTarget::Directory || is_directory) {
         return true;
     }
-    let components = candidate.split('/').collect::<Vec<_>>();
-    let ancestor_count = if is_directory {
-        components.len()
-    } else {
-        components.len().saturating_sub(1)
-    };
-    (1..=ancestor_count).any(|count| rule.matches_value(&components[..count].join("/")))
+    candidate
+        .match_indices('/')
+        .any(|(separator, _)| rule.matches_value(&candidate[..separator]))
 }
 
 fn trim_unescaped_trailing_spaces(mut line: &str) -> &str {
@@ -214,10 +257,12 @@ mod tests {
 
     #[test]
     fn ordered_negation_reincludes_a_file() {
-        let rules = vec![
+        let rules = [
             parse_rule("*.rs", "").unwrap(),
             parse_rule("!lib.rs", "").unwrap(),
-        ];
+        ]
+        .into_iter()
+        .collect();
         assert!(!is_ignored("src/lib.rs", false, &rules));
         assert!(is_ignored("src/generated.rs", false, &rules));
     }

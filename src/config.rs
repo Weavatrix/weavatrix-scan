@@ -108,9 +108,19 @@ impl ScanOptions {
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
             return false;
         };
-        self.extensions.contains(extension)
+        self.contains_extension(extension)
             || (extension.bytes().any(|byte| byte.is_ascii_uppercase())
-                && self.extensions.contains(&extension.to_ascii_lowercase()))
+                && self.contains_extension(&extension.to_ascii_lowercase()))
+    }
+
+    fn contains_extension(&self, extension: &str) -> bool {
+        if self.extensions.len() <= 8 {
+            self.extensions
+                .iter()
+                .any(|candidate| candidate == extension)
+        } else {
+            self.extensions.contains(extension)
+        }
     }
 
     pub(crate) fn worker_count(&self, file_count: usize) -> usize {
