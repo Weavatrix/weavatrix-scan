@@ -18,9 +18,16 @@ fn scan_report_round_trips_through_json() {
     assert_eq!(report, decoded);
 
     let mut legacy = serde_json::to_value(&report).unwrap();
-    legacy.as_object_mut().unwrap().remove("complete");
+    let legacy_object = legacy.as_object_mut().unwrap();
+    legacy_object.remove("complete");
+    legacy_object.remove("ignore_sources");
+    legacy_object.remove("termination");
+    legacy_object.remove("portable");
     let legacy: weavatrix_scan::ScanReport = serde_json::from_value(legacy).unwrap();
     assert!(legacy.complete);
+    assert!(legacy.ignore_sources.is_empty());
+    assert_eq!(legacy.termination, None);
+    assert!(legacy.portable);
 
     let selected = Scanner::new(&fixture)
         .options(ScanOptions::default().selected_files_only())

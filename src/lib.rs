@@ -6,6 +6,7 @@
 
 mod config;
 mod content;
+mod control;
 mod error;
 mod glob;
 mod ignore;
@@ -16,6 +17,7 @@ mod path_serde;
 mod pool;
 mod report;
 mod scan_finalize;
+mod scan_limits;
 mod scanner;
 mod walk_iter;
 mod walk_platform;
@@ -23,11 +25,17 @@ mod walk_types;
 mod walk_visit;
 mod walker;
 
-pub use config::{EvidenceMode, ScanOptions, StandardSkips};
+pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips};
+pub use control::CancellationToken;
 pub use error::{Error, Result};
-pub use ignore::IgnoreFile;
-pub use parallel::{ParallelWalkReport, ParallelWalker};
-pub use report::{ScanReport, ScanWarning, ScannedFile, SkipKind, SkippedEntry};
+pub use ignore::{IgnoreFile, RepositoryMatcher};
+pub use parallel::{
+    ParallelVisitReport, ParallelWalkReport, ParallelWalker, WalkControl, WalkEvent,
+};
+pub use report::{
+    IgnoreSourceEvidence, IgnoreSourceKind, ScanReport, ScanTermination, ScanWarning, ScannedFile,
+    SkipKind, SkippedEntry,
+};
 pub use scanner::{Scanner, scan_repository};
 pub use walker::{
     ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, WalkSkipReason, Walker,

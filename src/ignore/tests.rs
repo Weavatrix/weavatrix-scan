@@ -112,7 +112,11 @@ fn valid_gitignore_patterns_match_the_reference_backend() {
             .unwrap_or_else(|error| panic!("{pattern:?}: {error}"));
         let reference = builder.build().unwrap();
         for &(candidate, is_directory) in CANDIDATES {
-            let ours = ours.matches(candidate, is_directory);
+            let ours = ours
+                .matches(candidate, is_directory)
+                .map(|matched| match matched {
+                    RuleMatch::Exact(action) | RuleMatch::Ancestor(action) => action,
+                });
             let matched = reference.matched_path_or_any_parents(candidate, is_directory);
             let expected = if matched.is_ignore() {
                 Some(RuleAction::Ignore)
@@ -127,4 +131,83 @@ fn valid_gitignore_patterns_match_the_reference_backend() {
             );
         }
     }
+}
+
+#[test]
+fn parses_git_core_excludes_file_and_worktree_gitdir() {
+    let root = std::env::temp_dir().join(format!("weavatrix-ignore-config-{}", std::process::id()));
+    let worktree = root.join("worktree");
+    let git_directory = root.join("metadata");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&git_directory).unwrap();
+    std::fs::write(
+        root.join("gitconfig"),
+        "[core]\n  excludesFile = \"~/.config/git/custom-ignore\"\n",
+    )
+    .unwrap();
+    std::fs::write(worktree.join(".git"), "gitdir: ../metadata\n").unwrap();
+
+    let configured = read_excludes_setting(&root.join("gitconfig")).unwrap();
+    assert!(configured.ends_with(".config/git/custom-ignore"));
+    assert_eq!(
+        resolve_git_directory(&worktree).unwrap(),
+        worktree.join("../metadata")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn repository_and_source_helpers_cover_portable_edge_cases() {
+    let root =
+        std::env::temp_dir().join(format!("weavatrix-ignore-helpers-{}", std::process::id()));
+    let repository = root.join("repository");
+    let nested = repository.join("packages/app");
+    std::fs::create_dir_all(repository.join(".git/info")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        root.join("dotted-config"),
+        "core.excludesFile = relative-ignore\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        find_repository_root(&nested).as_deref(),
+        Some(repository.as_path())
+    );
+    assert_eq!(
+        resolve_git_directory(&repository).as_deref(),
+        Some(repository.join(".git").as_path())
+    );
+    assert_eq!(
+        read_excludes_setting(&root.join("dotted-config")).as_deref(),
+        Some(Path::new("relative-ignore"))
+    );
+    assert_eq!(expand_home("ordinary/path"), PathBuf::from("ordinary/path"));
+    assert_eq!(
+        normalized_evidence_location(&nested, &repository),
+        "packages/app"
+    );
+    assert!(normalized_evidence_location(&repository, &nested).contains("repository"));
+    assert_eq!(
+        source_for_name(".gitignore").0.index(),
+        SourceRank::GitIgnore.index()
+    );
+    assert_eq!(source_for_name(".ignore").1, IgnoreSourceKind::DotIgnore);
+    assert_eq!(source_for_name(".custom").1, IgnoreSourceKind::Custom);
+
+    let (rules, errors, evidence) = add_rule_file(
+        &IgnoreRules::default(),
+        &root.join("missing"),
+        "",
+        SourceRank::Explicit,
+        IgnoreSourceKind::Explicit,
+        "missing",
+        false,
+    );
+    assert!(rules.layers.iter().all(Option::is_none));
+    assert!(errors.is_empty());
+    assert!(evidence.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
 }

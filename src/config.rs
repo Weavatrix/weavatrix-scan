@@ -1,10 +1,12 @@
+use crate::control::CancellationToken;
 use crate::walker::{ErrorPolicy, WalkOptions};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 1_500_000;
-const DEFAULT_IGNORE_FILES: &[&str] = &[".gitignore", ".weavatrixignore"];
+const DEFAULT_IGNORE_FILES: &[&str] = &[".gitignore", ".ignore", ".weavatrixignore"];
 const DEFAULT_SKIP_DIRECTORIES: &[&str] = &[
     ".git",
     ".hg",
@@ -31,11 +33,62 @@ pub enum EvidenceMode {
     SelectedFiles,
 }
 
+/// Sources of ignore rules outside the scanned repository root.
+///
+/// The default is repository-local and reproducible. Use [`Self::git_compatible`]
+/// when matching the current machine's Git configuration is more important
+/// than producing a portable manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IgnorePolicy {
+    pub parent_rules: bool,
+    pub git_exclude: bool,
+    pub git_global: bool,
+    pub explicit_files: Vec<PathBuf>,
+}
+
+impl IgnorePolicy {
+    #[must_use]
+    pub const fn repository() -> Self {
+        Self {
+            parent_rules: false,
+            git_exclude: false,
+            git_global: false,
+            explicit_files: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn git_compatible() -> Self {
+        Self {
+            parent_rules: true,
+            git_exclude: true,
+            git_global: true,
+            explicit_files: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_explicit_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.explicit_files.push(path.into());
+        self
+    }
+}
+
+/// Hard bounds for hostile or unexpectedly large repository trees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScanLimits {
+    pub max_entries: Option<u64>,
+    pub max_total_bytes: Option<u64>,
+    pub timeout: Option<Duration>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub max_file_bytes: u64,
     pub extensions: BTreeSet<String>,
     pub ignore_files: Vec<String>,
+    /// Controls parent, repository-exclude and global Git ignore sources.
+    pub ignore_policy: IgnorePolicy,
     /// Match ignore patterns without ASCII case sensitivity.
     pub ignore_case_insensitive: bool,
     pub standard_skips: StandardSkips,
@@ -45,6 +98,10 @@ pub struct ScanOptions {
     pub evidence: EvidenceMode,
     /// Content-inspection workers. Zero selects the available parallelism.
     pub parallelism: usize,
+    /// Whole-scan resource bounds. All limits are disabled by default.
+    pub limits: ScanLimits,
+    /// Optional cooperative cancellation signal.
+    pub cancellation: Option<CancellationToken>,
     /// Low-level traversal policy.
     pub walk: WalkOptions,
 }
@@ -58,12 +115,15 @@ impl Default for ScanOptions {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            ignore_policy: IgnorePolicy::default(),
             ignore_case_insensitive: false,
             standard_skips: StandardSkips::Enabled,
             hash_file_contents: true,
             detect_binary_files: true,
             evidence: EvidenceMode::Complete,
             parallelism: 0,
+            limits: ScanLimits::default(),
+            cancellation: None,
             walk: WalkOptions::default().with_metadata(true),
         }
     }
@@ -102,6 +162,12 @@ impl ScanOptions {
         self
     }
 
+    #[must_use]
+    pub fn with_ignore_policy(mut self, policy: IgnorePolicy) -> Self {
+        self.ignore_policy = policy;
+        self
+    }
+
     /// Disables file-content reads for the fastest metadata-only discovery.
     ///
     /// The resulting report does not contain content hashes and may include
@@ -124,6 +190,30 @@ impl ScanOptions {
     #[must_use]
     pub const fn with_parallelism(mut self, parallelism: usize) -> Self {
         self.parallelism = parallelism;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_entries(mut self, max_entries: Option<u64>) -> Self {
+        self.limits.max_entries = max_entries;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_total_bytes(mut self, max_total_bytes: Option<u64>) -> Self {
+        self.limits.max_total_bytes = max_total_bytes;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.limits.timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = Some(cancellation);
         self
     }
 

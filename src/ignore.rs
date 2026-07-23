@@ -1,26 +1,39 @@
-use crate::report::{ScanReport, SkipKind};
+use crate::path::{RevisionHasher, normalized_relative_path};
+use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind};
 use std::collections::HashMap;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod git;
 mod matcher;
 mod parser;
+mod repository;
+mod repository_source;
+mod rules;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+use git::{expand_home, read_excludes_setting, resolve_git_directory};
 use matcher::RuleMatcher;
 use parser::parse_file;
+pub use repository::RepositoryMatcher;
+#[cfg(test)]
+use repository_source::{add_rule_file, find_repository_root};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IgnoreFile {
     pub name: String,
 }
 
+const SOURCE_COUNT: usize = 6;
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct IgnoreRules {
-    layer: Option<Arc<IgnoreLayer>>,
+    layers: [Option<Arc<IgnoreLayer>>; SOURCE_COUNT],
 }
 
 #[derive(Debug)]
@@ -67,6 +80,28 @@ enum RuleScope {
     Anchored,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RuleMatch {
+    Exact(RuleAction),
+    Ancestor(RuleAction),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SourceRank {
+    GitGlobal = 0,
+    GitExclude = 1,
+    GitIgnore = 2,
+    DotIgnore = 3,
+    Custom = 4,
+    Explicit = 5,
+}
+
+impl SourceRank {
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct IgnoreError {
     kind: io::ErrorKind,
@@ -94,20 +129,18 @@ pub(crate) fn build_child_rules(
     ignore_files: &[String],
     case_insensitive: bool,
     inherited: &IgnoreRules,
-) -> (IgnoreRules, Vec<IgnoreError>) {
-    let mut rules = RuleSet::default();
+    evidence_root: &Path,
+) -> (IgnoreRules, Vec<IgnoreError>, Vec<IgnoreSourceEvidence>) {
+    let mut result = inherited.clone();
+    let mut rules_by_source: [RuleSet; SOURCE_COUNT] = Default::default();
     let mut errors = Vec::new();
-    let mut found = false;
+    let mut evidence = Vec::new();
     for name in ignore_files {
         let path = directory.join(name);
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                found = true;
-                text
-            }
+        let text = match read_local_rule_file(&path) {
+            Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => {
-                found = true;
                 errors.push(IgnoreError {
                     kind: error.kind(),
                     path,
@@ -116,144 +149,52 @@ pub(crate) fn build_child_rules(
                 continue;
             }
         };
-        parse_file(&path, &text, case_insensitive, &mut rules, &mut errors);
+        let (rank, kind) = source_for_name(name);
+        parse_file(
+            &path,
+            &text,
+            case_insensitive,
+            &mut rules_by_source[rank.index()],
+            &mut errors,
+        );
+        evidence.push(source_evidence(
+            kind,
+            normalized_evidence_location(&path, evidence_root),
+            &text,
+        ));
     }
-    if !found || rules.rules.is_empty() {
-        return (inherited.clone(), errors);
+    for (index, rules) in rules_by_source.into_iter().enumerate() {
+        if rules.rules.is_empty() {
+            continue;
+        }
+        result.layers[index] = Some(Arc::new(IgnoreLayer {
+            base: base.to_owned(),
+            rules,
+            parent: result.layers[index].clone(),
+        }));
     }
-    (
-        IgnoreRules {
-            layer: Some(Arc::new(IgnoreLayer {
-                base: base.to_owned(),
-                rules,
-                parent: inherited.layer.clone(),
-            })),
-        },
-        errors,
-    )
+    (result, errors, evidence)
 }
 
 pub(crate) fn is_ignored(path: &str, is_directory: bool, rules: &IgnoreRules) -> bool {
-    let mut layer = rules.layer.as_deref();
-    while let Some(current) = layer {
-        if let Some(candidate) = candidate_for_base(path, &current.base)
-            && let Some(action) = current.rules.matches(candidate, is_directory)
-        {
-            return action == RuleAction::Ignore;
+    let mut ancestor_included = false;
+    for source in rules.layers.iter().rev() {
+        let mut layer = source.as_deref();
+        while let Some(current) = layer {
+            if let Some(candidate) = candidate_for_base(path, &current.base)
+                && let Some(rule_match) = current.rules.matches(candidate, is_directory)
+            {
+                match rule_match {
+                    RuleMatch::Exact(action) => return action == RuleAction::Ignore,
+                    RuleMatch::Ancestor(RuleAction::Include) => ancestor_included = true,
+                    RuleMatch::Ancestor(RuleAction::Ignore) if !ancestor_included => return true,
+                    RuleMatch::Ancestor(RuleAction::Ignore) => {}
+                }
+            }
+            layer = current.parent.as_deref();
         }
-        layer = current.parent.as_deref();
     }
     false
-}
-
-pub(crate) fn skip_ignored(
-    report: &mut ScanReport,
-    relative: &str,
-    is_directory: bool,
-    rules: &IgnoreRules,
-) -> bool {
-    let ignored = is_ignored(relative, is_directory, rules);
-    if ignored {
-        report.skip(relative.to_owned(), SkipKind::Ignored, None);
-    }
-    ignored
-}
-
-impl RuleSet {
-    fn push(&mut self, rule: IgnoreRule) {
-        let index = self.rules.len();
-        if rule.scope == RuleScope::Anywhere && rule.matcher.is_literal() {
-            self.exact_anywhere
-                .entry(rule.pattern.clone())
-                .or_default()
-                .push(index);
-        } else if let Some(key) = rule.matcher.prefix_key() {
-            self.prefixes.entry(key).or_default().push(index);
-        } else if let Some(key) = rule.matcher.suffix_key(&rule.pattern) {
-            self.suffixes.entry(key).or_default().push(index);
-        } else {
-            self.generic.push(index);
-        }
-        self.rules.push(rule);
-    }
-
-    fn matches(&self, path: &str, is_directory: bool) -> Option<RuleAction> {
-        if let Some(action) = self.matches_exact(path, is_directory) {
-            return Some(action);
-        }
-        let mut ancestor = path;
-        while let Some((parent, _)) = ancestor.rsplit_once('/') {
-            if let Some(action) = self.matches_exact(parent, true) {
-                return Some(action);
-            }
-            ancestor = parent;
-        }
-        None
-    }
-
-    fn matches_exact(&self, path: &str, is_directory: bool) -> Option<RuleAction> {
-        let mut best = None;
-        let name = path.rsplit('/').next().unwrap_or(path);
-        if let Some(indices) = self.exact_anywhere.get(name)
-            && let Some(&index) = indices
-                .iter()
-                .rev()
-                .find(|&&index| self.rules[index].matches_exact(path, is_directory))
-        {
-            best = Some(index);
-        }
-        best = self.best_match(&self.generic, path, is_directory, best);
-        let name_prefix = name.as_bytes().first();
-        if let Some(indices) = name_prefix.and_then(|key| self.prefixes.get(key)) {
-            best = self.best_match(indices, path, is_directory, best);
-        }
-        if let Some(path_prefix) = path.as_bytes().first()
-            && Some(path_prefix) != name_prefix
-            && let Some(indices) = self.prefixes.get(path_prefix)
-        {
-            best = self.best_match(indices, path, is_directory, best);
-        }
-        if let Some(indices) = path
-            .as_bytes()
-            .last()
-            .and_then(|key| self.suffixes.get(key))
-        {
-            best = self.best_match(indices, path, is_directory, best);
-        }
-        best.map(|index| self.rules[index].action)
-    }
-
-    fn best_match(
-        &self,
-        indices: &[usize],
-        path: &str,
-        is_directory: bool,
-        mut best: Option<usize>,
-    ) -> Option<usize> {
-        for &index in indices.iter().rev() {
-            if best.is_some_and(|best| index <= best) {
-                break;
-            }
-            if self.rules[index].matches_exact(path, is_directory) {
-                best = Some(index);
-                break;
-            }
-        }
-        best
-    }
-}
-
-impl IgnoreRule {
-    fn matches_exact(&self, path: &str, is_directory: bool) -> bool {
-        if self.target == RuleTarget::Directory && !is_directory {
-            return false;
-        }
-        if self.scope == RuleScope::Anywhere {
-            let name = path.rsplit('/').next().unwrap_or(path);
-            return self.matcher.matches(&self.pattern, name);
-        }
-        self.matcher.matches(&self.pattern, path)
-    }
 }
 
 fn candidate_for_base<'a>(path: &'a str, base: &str) -> Option<&'a str> {
@@ -262,4 +203,44 @@ fn candidate_for_base<'a>(path: &'a str, base: &str) -> Option<&'a str> {
     } else {
         path.strip_prefix(base)?.strip_prefix('/')
     }
+}
+
+fn source_for_name(name: &str) -> (SourceRank, IgnoreSourceKind) {
+    match name {
+        ".gitignore" => (SourceRank::GitIgnore, IgnoreSourceKind::GitIgnore),
+        ".ignore" => (SourceRank::DotIgnore, IgnoreSourceKind::DotIgnore),
+        _ => (SourceRank::Custom, IgnoreSourceKind::Custom),
+    }
+}
+
+fn source_evidence(
+    kind: IgnoreSourceKind,
+    location: String,
+    contents: &str,
+) -> IgnoreSourceEvidence {
+    let mut hash = RevisionHasher::new();
+    hash.write(contents.as_bytes());
+    IgnoreSourceEvidence {
+        kind,
+        location,
+        content_hash: hash.finish(),
+    }
+}
+
+fn normalized_evidence_location(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root).map_or_else(
+        |_| path.to_string_lossy().replace('\\', "/"),
+        normalized_relative_path,
+    )
+}
+
+fn read_local_rule_file(path: &Path) -> io::Result<String> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ignore file is a symbolic link",
+        ));
+    }
+    fs::read_to_string(path)
 }

@@ -18,13 +18,14 @@ native volume and file identities.
 ## Why another repository walker?
 
 `walkdir` and `jwalk` are excellent traversal libraries. `ignore` adds mature
-Git-style filtering. Weavatrix Scan now exposes three deliberately separate
+Git-style filtering. Weavatrix Scan now exposes four deliberately separate
 layers:
 
 - `Walker`: iterative, streaming, lossless low-level traversal;
 - `Scanner`: ignore-aware deterministic manifest, hashes, revision, and typed
   evidence;
-- `ParallelWalker`: bounded parallel traversal for wide trees.
+- `RepositoryMatcher`: cached path selection for incremental consumers;
+- `ParallelWalker`: bounded collected or streaming traversal for wide trees.
 
 | Capability | weavatrix-scan | ignore | walkdir | jwalk |
 | --- | :---: | :---: | :---: | :---: |
@@ -35,13 +36,16 @@ layers:
 | Same-filesystem boundary | Yes | No | Yes | No |
 | `.gitignore` hierarchy | Yes | Yes | No | No |
 | Custom ignore files | Yes | Yes | No | No |
+| Repository / Git-compatible ignore modes | Yes | Yes | No | No |
+| Reusable cached matcher | Yes | Yes | No | No |
 | Stable normalized paths | Yes | No | No | Sorted traversal |
 | File sizes and content hashes | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
 | Binary and oversized-file policy | Yes | No | No | No |
 | Typed skip reasons and warnings | Yes | No | No | No |
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
-| Parallel traversal / content inspection | Yes / Yes | Yes / N/A | No | Yes |
+| Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
+| Cancellation and whole-scan budgets | Yes | Quit only | No | No |
 | Default runtime dependencies | 0 Unix / 1 Windows | Multiple | 2 platform helpers | Rayon stack |
 
 Use `Walker` when you only need paths. Use `Scanner` when downstream results
@@ -147,6 +151,26 @@ println!("entries={}, local_errors={}", report.entries.len(), report.errors.len(
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
 
+For pipelines that should parse entries immediately instead of collecting
+them, `visit` invokes a thread-safe callback directly on traversal workers:
+
+```rust
+use weavatrix_scan::{ParallelWalker, WalkControl, WalkEvent};
+
+let summary = ParallelWalker::new(".").visit(|event| match event {
+    WalkEvent::Entry(entry) if entry.file_name() == "target" => WalkControl::Skip,
+    WalkEvent::Entry(entry) => {
+        println!("{}", entry.path().display());
+        WalkControl::Continue
+    }
+    WalkEvent::Error(error) => {
+        eprintln!("{error}");
+        WalkControl::Continue
+    }
+})?;
+# Ok::<(), weavatrix_scan::WalkError>(())
+```
+
 ## Scan modes
 
 The same scanner supports three useful cost levels:
@@ -170,9 +194,12 @@ host application owns the wider scheduling policy.
 - `files`: stable, lexicographically sorted `ScannedFile` values;
 - `skipped`: stable, sorted evidence for excluded entries;
 - `warnings`: non-fatal ignore-file and local I/O diagnostics;
-- `revision`: FNV-1a digest over selected relative paths and optional content
-  hashes;
+- `ignore_sources`: typed location and hash of every loaded selection input;
+- `revision`: FNV-1a digest over ignore inputs, selected paths, optional content
+  hashes, portability, and partial-termination state;
 - `complete`: false when local errors made the evidence partial.
+- `termination`: typed reason for a bounded or cancelled partial scan;
+- `portable`: false when host-level Git configuration affected selection.
 
 Each `ScannedFile` contains an absolute path, slash-normalized repository path,
 byte size, and optional content hash. Default hashes are deterministic FNV-1a
@@ -209,13 +236,18 @@ from "unreadable" or "outside the repository."
 | --- | --- | --- |
 | `max_file_bytes` | 1,500,000 | Reject oversized source candidates |
 | `extensions` | Empty | Empty accepts every extension |
-| `ignore_files` | `.gitignore`, `.weavatrixignore` | Hierarchical local ignore files |
+| `ignore_files` | `.gitignore`, `.ignore`, `.weavatrixignore` | Hierarchical local ignore files |
+| `ignore_policy` | Repository-only | Optional parents, `.git/info/exclude`, global Git and explicit files |
 | `ignore_case_insensitive` | `false` | Optional ASCII case-insensitive ignore matching |
 | `standard_skips` | Enabled | Skip generated/vendor directories |
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
 | `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
 | `parallelism` | `0` | Content workers; zero uses available parallelism |
+| `limits.max_entries` | None | Bound examined filesystem entries |
+| `limits.max_total_bytes` | None | Deterministically bound selected content bytes |
+| `limits.timeout` | None | Stop traversal/content inspection after a duration |
+| `cancellation` | None | Cooperative cross-thread cancellation token |
 | `walk.max_depth` | None | Limit entry depth; root is zero |
 | `walk.max_open` | `64` | Bound live directory handles/workers |
 | `walk.same_file_system` | `false` | Stop at filesystem boundaries when enabled |
@@ -241,8 +273,10 @@ options.standard_skips = StandardSkips::Disabled;
 
 ## Ignore semantics
 
-Ignore files are loaded hierarchically. Later matching rules win. Supported
-Git-style constructs include:
+Ignore files are loaded hierarchically with source precedence
+`.weavatrixignore`/custom > `.ignore` > `.gitignore` >
+`.git/info/exclude` > global Git. Deeper files win within the same source
+class. Supported Git-style constructs include:
 
 - comments and escaped leading `#` / `!`;
 - negation with `!`;
@@ -253,9 +287,13 @@ Git-style constructs include:
 - brace alternatives such as `{foo,bar}`;
 - escaped literals and escaped trailing spaces.
 
-The scanner intentionally does not read global Git configuration or
-`.git/info/exclude`. Repository-local selection therefore stays portable across
-machines. Differential tests compare exact selected path sets against the
+The default scanner intentionally does not read global Git configuration,
+parent rules outside the scan root, or `.git/info/exclude`; repository-local
+selection therefore stays portable. `IgnorePolicy::git_compatible()` enables
+all three explicitly, records their content hashes, and marks host-dependent
+reports non-portable. `RepositoryMatcher` exposes the same lazily cached
+selection semantics without requiring a full walk. Differential tests compare
+exact selected path sets against the
 `ignore` crate for anchored, nested, negated, wildcard, and character-class
 fixtures plus deterministic randomized rule sets. Stress cases cover deep
 trees, permission errors, non-UTF8 names, and followed symlink loops. The
@@ -272,6 +310,8 @@ differential suite and competitor crates are dev-only.
 - continues after independent local errors by default and marks the report
   partial;
 - caps selected file size before content reads;
+- rejects repository-local ignore-file symlinks and path traversal;
+- supports entry, total-byte, timeout, and cooperative cancellation bounds;
 - forbids unsafe Rust.
 
 The scanner is read-only. Concurrent filesystem changes are surfaced as local
@@ -364,12 +404,14 @@ The test suite covers:
 
 - deterministic results and revisions;
 - ignore-rule precedence and nested ignore files;
+- repository-only, Git-exclude, parent, explicit and reusable-matcher policies;
 - representative and randomized parity with `ignore`;
 - raw entry parity with `walkdir` and `jwalk`;
 - iterative deep trees, bounded handles, local error continuation, non-UTF8
   paths, and symlink loops;
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
+- streaming parallel pruning and cancellation;
 - optional Serde support.
 
 The real-repository benchmark compares the complete normalized selected-path

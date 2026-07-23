@@ -1,10 +1,11 @@
 use crate::config::{EvidenceMode, ScanOptions};
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
-use crate::ignore::{IgnoreRules, build_child_rules, skip_ignored};
+use crate::ignore::RepositoryMatcher;
 use crate::path::normalized_relative_path;
 use crate::report::{ScanReport, ScannedFile, SkipKind};
 use crate::scan_finalize::finalize_report;
+use crate::scan_limits::{ScanRuntime, apply_total_bytes_limit};
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason, Walker};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,22 +65,42 @@ fn scan_repository_with_options(root: &Path, options: &ScanOptions) -> Result<Sc
     );
     let mut walker = Walker::with_options(&canonical, options.walk_options())
         .map_err(walker_error_into_scan_error)?;
-    let mut directory_rules = Vec::new();
-    while let Some(item) = walker.next() {
+    let mut matcher = RepositoryMatcher::with_options(&canonical, options)?;
+    let mut runtime = ScanRuntime::new();
+    loop {
+        if let Some(reason) = runtime.before_next(options) {
+            report.terminate(reason);
+            break;
+        }
+        let Some(item) = walker.next() else {
+            break;
+        };
+        runtime.record_entry();
         match item {
-            Ok(entry) => process_entry(
-                &entry,
-                options,
-                &mut report,
-                &mut directory_rules,
-                &mut walker,
-            )?,
+            Ok(entry) => {
+                process_entry(&entry, options, &mut report, &mut matcher, &mut walker)?;
+            }
             Err(error) => record_walk_error(error, &canonical, options, &mut report)?,
         }
     }
-    let inspected = inspect_files(std::mem::take(&mut report.files), options)?;
+    report.ignore_sources = matcher.sources().to_vec();
+    report.portable = matcher.portable();
+    if !matcher.warnings().is_empty() {
+        report.complete = false;
+        report.warnings.extend_from_slice(matcher.warnings());
+    }
+    if report.termination.is_none()
+        && let Some(reason) = runtime.external_termination(options)
+    {
+        report.terminate(reason);
+    }
+    apply_total_bytes_limit(&mut report, options);
+    let inspected = inspect_files(std::mem::take(&mut report.files), options, runtime.started)?;
     report.files = inspected.files;
     report.skipped.extend(inspected.skipped);
+    if let Some(reason) = inspected.termination {
+        report.terminate(reason);
+    }
     if !inspected.warnings.is_empty() {
         report.complete = false;
         report.warnings.extend(inspected.warnings);
@@ -92,7 +113,7 @@ fn process_entry(
     entry: &WalkEntry,
     options: &ScanOptions,
     report: &mut ScanReport,
-    directory_rules: &mut Vec<(PathBuf, IgnoreRules)>,
+    matcher: &mut RepositoryMatcher,
     walker: &mut Walker,
 ) -> Result<()> {
     let relative_path = entry.relative_path();
@@ -102,8 +123,7 @@ fn process_entry(
             report.skip(".".to_owned(), skip_kind(reason), None);
             return Ok(());
         }
-        let rules = load_ignore_files(entry.path(), "", options, &IgnoreRules::default(), report)?;
-        directory_rules.push((PathBuf::new(), rules));
+        matcher.prepare_directory(entry.path())?;
         return Ok(());
     }
     if entry.is_symlink() && !options.walk.follow_links {
@@ -115,39 +135,27 @@ fn process_entry(
         return Ok(());
     }
 
-    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
-    while directory_rules
-        .last()
-        .is_some_and(|(directory, _)| directory != parent)
-    {
-        directory_rules.pop();
-    }
     if entry.is_dir() {
         if options.should_skip_directory(entry.file_name()) {
             walker.skip_current_dir();
             report.skip(relative, SkipKind::StandardDirectory, None);
             return Ok(());
         }
-        let inherited_rules = directory_rules
-            .last()
-            .map(|(_, rules)| rules)
-            .expect("root ignore rules are present");
-        if skip_ignored(report, &relative, true, inherited_rules) {
+        let parent = entry.path().parent().unwrap_or(entry.path());
+        if matcher.is_ignored_prepared(&relative, parent, true) {
             walker.skip_current_dir();
+            report.skip(relative, SkipKind::Ignored, None);
             return Ok(());
         }
-        let rules = load_ignore_files(entry.path(), &relative, options, inherited_rules, report)?;
-        directory_rules.push((relative_path.to_path_buf(), rules));
+        matcher.prepare_directory(entry.path())?;
         return Ok(());
     }
     if !entry.is_file() {
         return Ok(());
     }
-    let inherited_rules = directory_rules
-        .last()
-        .map(|(_, rules)| rules)
-        .expect("root ignore rules are present");
-    if skip_ignored(report, &relative, false, inherited_rules) {
+    let parent = entry.path().parent().unwrap_or(entry.path());
+    if matcher.is_ignored_prepared(&relative, parent, false) {
+        report.skip(relative, SkipKind::Ignored, None);
         return Ok(());
     }
     process_file(entry, relative, options, report)
@@ -195,35 +203,6 @@ fn process_file(
         content_hash: None,
     });
     Ok(())
-}
-
-fn load_ignore_files(
-    directory: &Path,
-    relative: &str,
-    options: &ScanOptions,
-    inherited: &IgnoreRules,
-    report: &mut ScanReport,
-) -> Result<IgnoreRules> {
-    let (rules, errors) = build_child_rules(
-        directory,
-        relative,
-        &options.ignore_files,
-        options.ignore_case_insensitive,
-        inherited,
-    );
-    for source in errors {
-        if options.walk.error_policy == ErrorPolicy::Abort {
-            return Err(Error::io(
-                directory,
-                std::io::Error::new(source.kind(), source),
-            ));
-        }
-        report.warn(
-            Some(relative.to_owned()),
-            format!("could not load ignore rules: {source}"),
-        );
-    }
-    Ok(rules)
 }
 
 fn record_walk_error(
