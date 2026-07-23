@@ -1,4 +1,4 @@
-use crate::config::ScanOptions;
+use crate::config::{EvidenceMode, ScanOptions};
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
 use crate::ignore::{IgnoreRules, build_child_rules, skip_ignored};
@@ -58,7 +58,10 @@ fn scan_repository_with_options(root: &Path, options: &ScanOptions) -> Result<Sc
         return Err(Error::InvalidRoot(canonical));
     }
 
-    let mut report = ScanReport::new(canonical.clone());
+    let mut report = ScanReport::new(
+        canonical.clone(),
+        options.evidence == EvidenceMode::Complete,
+    );
     let mut walker = Walker::with_options(&canonical, options.walk_options())
         .map_err(walker_error_into_scan_error)?;
     let mut directory_rules = Vec::new();

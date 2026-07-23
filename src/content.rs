@@ -1,4 +1,4 @@
-use crate::config::ScanOptions;
+use crate::config::{EvidenceMode, ScanOptions};
 use crate::error::{Error, Result};
 use crate::path::{RevisionHasher, looks_binary};
 use crate::report::{ScanWarning, ScannedFile, SkipKind, SkippedEntry};
@@ -76,14 +76,14 @@ fn inspect_chunk(files: Vec<ScannedFile>, options: &ScanOptions) -> Result<Inspe
                 }
             };
             if options.detect_binary_files && looks_binary(&bytes) {
-                inspected.skipped.push(binary_skip(file.relative));
+                record_binary_skip(&mut inspected, file.relative, options);
                 continue;
             }
             file.content_hash = Some(hash_bytes(&bytes));
         } else if options.detect_binary_files {
             match file_looks_binary(&file.absolute) {
                 Ok(true) => {
-                    inspected.skipped.push(binary_skip(file.relative));
+                    record_binary_skip(&mut inspected, file.relative, options);
                     continue;
                 }
                 Ok(false) => {}
@@ -112,6 +112,12 @@ fn binary_skip(relative: String) -> SkippedEntry {
     }
 }
 
+fn record_binary_skip(inspected: &mut InspectedFiles, relative: String, options: &ScanOptions) {
+    if options.evidence == EvidenceMode::Complete {
+        inspected.skipped.push(binary_skip(relative));
+    }
+}
+
 fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = RevisionHasher::new();
     hasher.write(bytes);
@@ -136,11 +142,13 @@ fn record_io_error(
         return Err(Error::io(&file.absolute, source));
     }
     let message = format!("{operation}: {source}");
-    inspected.skipped.push(SkippedEntry {
-        relative: file.relative.clone(),
-        kind: SkipKind::IoError,
-        detail: Some(message.clone()),
-    });
+    if options.evidence == EvidenceMode::Complete {
+        inspected.skipped.push(SkippedEntry {
+            relative: file.relative.clone(),
+            kind: SkipKind::IoError,
+            detail: Some(message.clone()),
+        });
+    }
     inspected.warnings.push(ScanWarning {
         relative: Some(file.relative.clone()),
         message,

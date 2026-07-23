@@ -1,0 +1,78 @@
+{
+  "architectureContractV": 1,
+  "name": "Weavatrix Scan layered library",
+  "style": "layered",
+  "enforcement": "ratchet",
+  "components": [
+    {
+      "id": "crate-root",
+      "name": "Public crate surface",
+      "paths": ["src/lib.rs"]
+    },
+    {
+      "id": "contracts",
+      "name": "Public contracts and evidence",
+      "paths": [
+        "src/config.rs",
+        "src/error.rs",
+        "src/report.rs",
+        "src/walk_types.rs",
+        "src/path_serde.rs"
+      ]
+    },
+    {
+      "id": "traversal",
+      "name": "Filesystem traversal",
+      "paths": [
+        "src/walker.rs",
+        "src/walk_iter.rs",
+        "src/walk_platform.rs",
+        "src/walk_visit.rs",
+        "src/parallel.rs",
+        "src/pool.rs"
+      ]
+    },
+    {
+      "id": "filtering",
+      "name": "Ignore and glob filtering",
+      "paths": [
+        "src/ignore.rs",
+        "src/ignore",
+        "src/glob.rs"
+      ]
+    },
+    {
+      "id": "scan-engine",
+      "name": "Manifest scan engine",
+      "paths": [
+        "src/scanner.rs",
+        "src/content.rs",
+        "src/scan_finalize.rs",
+        "src/path.rs"
+      ]
+    },
+    {
+      "id": "benchmarks",
+      "name": "Benchmark harnesses",
+      "paths": ["benches"]
+    }
+  ],
+  "dependencyRules": [],
+  "budgets": {
+    "runtimeCycles": 0,
+    "maxFileLoc": 300,
+    "maxFunctionLoc": 120,
+    "maxCyclomatic": 15
+  },
+  "technologies": {
+    "required": ["rust"],
+    "forbidden": ["unsafe-rust"]
+  },
+  "exceptions": [],
+  "ratchet": {
+    "baseline": {
+      "fingerprints": [],
+      "metrics": {}
+    }
+  }
+}

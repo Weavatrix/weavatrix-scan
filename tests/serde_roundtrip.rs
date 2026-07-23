@@ -22,10 +22,18 @@ fn scan_report_round_trips_through_json() {
     let legacy: weavatrix_scan::ScanReport = serde_json::from_value(legacy).unwrap();
     assert!(legacy.complete);
 
+    let selected = Scanner::new(&fixture)
+        .options(ScanOptions::default().selected_files_only())
+        .scan()
+        .unwrap();
+    let selected_json = serde_json::to_string(&selected).unwrap();
+    let selected_decoded = serde_json::from_str(&selected_json).unwrap();
+    assert_eq!(selected, selected_decoded);
+
     let _ = std::fs::remove_dir_all(fixture);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn non_utf8_report_paths_round_trip_losslessly() {
     use std::ffi::OsString;
@@ -39,12 +47,25 @@ fn non_utf8_report_paths_round_trip_losslessly() {
     let name = OsString::from_vec(vec![
         b'n', b'a', b't', b'i', b'v', b'e', 0x80, b'.', b'r', b's',
     ]);
-    std::fs::write(fixture.join(&name), "fn run() {}\n").unwrap();
-
-    let report = Scanner::new(&fixture)
-        .options(ScanOptions::default().with_extensions(["rs"]))
-        .scan()
-        .unwrap();
+    let native_path = fixture.join(&name);
+    let mut report = if std::fs::write(&native_path, "fn run() {}\n").is_ok() {
+        Scanner::new(&fixture)
+            .options(ScanOptions::default().with_extensions(["rs"]))
+            .scan()
+            .unwrap()
+    } else {
+        std::fs::write(fixture.join("fallback.rs"), "fn run() {}\n").unwrap();
+        let mut report = Scanner::new(&fixture)
+            .options(ScanOptions::default().with_extensions(["rs"]))
+            .scan()
+            .unwrap();
+        report.files[0].absolute = native_path;
+        report.files[0].relative = "native%80.rs".to_owned();
+        report
+    };
+    report
+        .files
+        .sort_by(|left, right| left.relative.cmp(&right.relative));
     let json = serde_json::to_string(&report).unwrap();
     let decoded: weavatrix_scan::ScanReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, decoded);

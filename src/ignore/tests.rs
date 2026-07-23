@@ -42,6 +42,8 @@ fn valid_gitignore_patterns_match_the_reference_backend() {
         "[literal",
         "foo*",
         "*foo",
+        "src/*",
+        "/foo*",
         "foo?",
         "foo[0-9]",
         "foo[!0-9].txt",

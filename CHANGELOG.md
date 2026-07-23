@@ -11,8 +11,12 @@ All notable changes to this project are documented here.
 - Expand repository-local Git-ignore parity, diagnostics, and differential
   tests, including nested precedence and non-UTF8 paths.
 - Remove per-entry shared-root contention and reuse a bounded worker pool.
+- Add a selected-files-only evidence mode for fair, low-allocation manifest
+  discovery and bucket common ignore matchers by literal prefix/suffix.
 - Bring parallel traversal within the same performance tier as `jwalk` and
   make ignore-aware scanning faster than `ignore` on the published benchmark.
+- Add a checked layered architecture contract and keep every Rust file at or
+  below 300 lines.
 - Validate Rust 1.88 on Linux, Windows, and macOS.
 
 ## 0.1.0 - 2026-07-23

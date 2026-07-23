@@ -8,6 +8,14 @@ pub(crate) fn looks_binary(bytes: &[u8]) -> bool {
 }
 
 pub(crate) fn normalized_relative_path(path: &Path) -> String {
+    if path.is_relative()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && let Some(text) = path.to_str()
+    {
+        return normalize_valid_text(text);
+    }
     let mut normalized = String::new();
     for component in path.components() {
         let value = match component {
@@ -19,6 +27,23 @@ pub(crate) fn normalized_relative_path(path: &Path) -> String {
             normalized.push('/');
         }
         normalized.push_str(&value);
+    }
+    normalized
+}
+
+fn normalize_valid_text(text: &str) -> String {
+    if !text.contains('%') && !text.contains(std::path::MAIN_SEPARATOR) {
+        return text.to_owned();
+    }
+    let mut normalized = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character == '%' {
+            normalized.push_str("%25");
+        } else if character == std::path::MAIN_SEPARATOR {
+            normalized.push('/');
+        } else {
+            normalized.push(character);
+        }
     }
     normalized
 }

@@ -23,7 +23,7 @@ mod walk_types;
 mod walk_visit;
 mod walker;
 
-pub use config::{ScanOptions, StandardSkips};
+pub use config::{EvidenceMode, ScanOptions, StandardSkips};
 pub use error::{Error, Result};
 pub use ignore::IgnoreFile;
 pub use parallel::{ParallelWalkReport, ParallelWalker};

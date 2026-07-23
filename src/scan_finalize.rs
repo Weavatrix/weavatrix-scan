@@ -17,6 +17,7 @@ pub(crate) fn finalize_report(report: &mut ScanReport) {
             .then_with(|| left.message.cmp(&right.message))
     });
     report.revision = revision_for(&report.files);
+    report.finish_recording();
 }
 
 fn revision_for(files: &[ScannedFile]) -> String {

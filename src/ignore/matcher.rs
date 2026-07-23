@@ -27,6 +27,21 @@ impl RuleMatcher {
         matches!(self, Self::Literal(false))
     }
 
+    pub(super) fn prefix_key(&self) -> Option<u8> {
+        match self {
+            Self::Prefix(prefix, false) => prefix.bytes().next(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn suffix_key(&self, pattern: &str) -> Option<u8> {
+        match self {
+            Self::Suffix(suffix, false) => suffix.bytes().next_back(),
+            Self::Literal(false) => pattern.bytes().next_back(),
+            _ => None,
+        }
+    }
+
     pub(super) fn matches(&self, pattern: &str, value: &str) -> bool {
         match self {
             Self::Literal(false) => pattern == value,

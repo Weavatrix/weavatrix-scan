@@ -96,7 +96,8 @@ let report = Scanner::new(".")
     .options(
         ScanOptions::default()
             .with_extensions(["rs", "go", "ts"])
-            .metadata_only(),
+            .metadata_only()
+            .selected_files_only(),
     )
     .scan()?;
 
@@ -150,11 +151,12 @@ println!("entries={}, local_errors={}", report.entries.len(), report.errors.len(
 
 The same scanner supports three useful cost levels:
 
-| Mode | Configuration | Reads content | Detects binary | Hashes content |
+| Mode | Configuration | Reads content | Skip evidence | Hashes content |
 | --- | --- | :---: | :---: | :---: |
-| Rich manifest | `ScanOptions::default()` | Yes | Yes | Yes |
-| Safe discovery | `hash_file_contents = false` | First 8 KiB | Yes | No |
-| Metadata only | `.metadata_only()` | No | No | No |
+| Rich manifest | `ScanOptions::default()` | Yes | Complete | Yes |
+| Safe discovery | `hash_file_contents = false` | First 8 KiB | Complete | No |
+| Metadata only | `.metadata_only()` | No | Complete | No |
+| Selected manifest | `.metadata_only().selected_files_only()` | No | Omitted | No |
 
 Content inspection uses available CPU parallelism by default. Set
 `.with_parallelism(1)` for a serial run or pass a fixed worker count when a
@@ -212,13 +214,14 @@ from "unreadable" or "outside the repository."
 | `standard_skips` | Enabled | Skip generated/vendor directories |
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
+| `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
 | `parallelism` | `0` | Content workers; zero uses available parallelism |
 | `walk.max_depth` | None | Limit entry depth; root is zero |
 | `walk.max_open` | `64` | Bound live directory handles/workers |
 | `walk.same_file_system` | `false` | Stop at filesystem boundaries when enabled |
 | `walk.follow_links` | `false` | Follow only in-root links and detect cycles |
 | `walk.error_policy` | `Continue` | Continue with partial typed evidence or abort |
-| `walk.collect_metadata` | `true` in `ScanOptions` | Capture size during traversal and avoid a second metadata pass |
+| `walk.collect_metadata` | `true` in `ScanOptions` | Reuse directory-entry metadata without reopening selected paths |
 
 The standard directory policy skips:
 
@@ -305,21 +308,23 @@ Sample result on Windows 11, Rust 1.97.1, warm filesystem cache:
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 18.9 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 15.6 ms |
-| Raw paths | ignore | 6,004 | 21.1 ms |
-| Raw paths | walkdir | 6,004 | 20.2 ms |
-| Raw paths | jwalk | 6,004 | 15.4 ms |
-| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 43.5 ms |
-| Ignore-aware manifest | ignore | 6,001 | 51.0 ms |
-| Rich manifest | weavatrix `Scanner` | 6,000 | 109.2 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 12.6 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 11.6 ms |
+| Raw paths | ignore | 6,004 | 16.0 ms |
+| Raw paths | walkdir | 6,004 | 13.2 ms |
+| Raw paths | jwalk | 6,004 | 10.0 ms |
+| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 24.7 ms |
+| Ignore-aware manifest | ignore | 6,001 | 27.7 ms |
+| Rich manifest | weavatrix `Scanner` | 6,000 | 90.1 ms |
 
 This is the median of three independent output-equivalent Windows benchmark
-processes. `Walker` is in the same performance tier as `walkdir`;
-`ParallelWalker` is within 2% of `jwalk` on this wide corpus. The ignore-aware
-`Scanner` is about 15% faster than `ignore` here while also recording typed
-skip/warning evidence. The rich row additionally reads content, detects
-binaries, hashes sources, and computes a deterministic revision.
+processes; each process itself reports the median of 11 interleaved samples
+after two warmups. `Walker` and `ParallelWalker` beat `walkdir` on this corpus.
+`jwalk` remains the narrow raw-parallel winner, while the selected-manifest
+`Scanner` is about 11% faster than `ignore`. The comparable scanner row omits
+skip evidence on both sides. The rich row additionally records typed evidence,
+reads content, detects binaries, hashes sources, and computes a deterministic
+revision.
 
 Source review explains the remaining differences:
 
@@ -337,10 +342,19 @@ Exact-path real-repository sample:
 
 | Repository | Files | weavatrix-scan | ignore |
 | --- | ---: | ---: | ---: |
-| weavatrix-scan | 36 | 3.4 ms | 4.2 ms |
+| radiochron | 86 | 18.7 ms | 22.9 ms |
+| grpc-server | 30 | 5.4 ms | 5.6 ms |
+| bgp-speaker | 30 | 4.7 ms | 5.6 ms |
+| controller-rest-api | 1,085 | 38.3 ms | 38.4 ms |
+| frontend | 1,689 | 39.8 ms | 46.3 ms |
+| analytics | 361 | 40.6 ms | 40.4 ms |
+| automation | 1,670 | 22.6 ms | 22.2 ms |
 
-Timing varies by filesystem, cache, antivirus, and CPU. Treat the table as a
-reproducible sample, not a universal constant.
+Every real row first asserts the exact same sorted `(normalized path, bytes)`
+manifest. Weavatrix is faster on five repositories; the remaining two are
+within 2%, below the observed run-to-run variance. Timing varies by filesystem,
+cache, antivirus, and CPU, so treat the table as a reproducible sample rather
+than a universal constant.
 
 ## Correctness checks
 

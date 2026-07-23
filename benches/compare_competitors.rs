@@ -89,6 +89,7 @@ fn weavatrix_manifest(root: &Path, respect_ignore_files: bool) -> Manifest {
     let mut options = ScanOptions::default()
         .with_extensions(EXTENSIONS)
         .metadata_only();
+    options = options.selected_files_only();
     options.standard_skips = StandardSkips::Disabled;
     if !respect_ignore_files {
         options = options.with_ignore_files(std::iter::empty::<&str>());

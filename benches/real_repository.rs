@@ -48,7 +48,8 @@ type Manifest = Vec<(String, u64)>;
 fn weavatrix_manifest(root: &Path) -> Manifest {
     let mut options = ScanOptions::default()
         .with_extensions(EXTENSIONS)
-        .metadata_only();
+        .metadata_only()
+        .selected_files_only();
     options.standard_skips = StandardSkips::Disabled;
     options.max_file_bytes = u64::MAX;
     Scanner::new(root)

@@ -25,6 +25,12 @@ pub enum StandardSkips {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceMode {
+    Complete,
+    SelectedFiles,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub max_file_bytes: u64,
@@ -35,6 +41,8 @@ pub struct ScanOptions {
     pub standard_skips: StandardSkips,
     pub hash_file_contents: bool,
     pub detect_binary_files: bool,
+    /// Record typed evidence for entries excluded by policy.
+    pub evidence: EvidenceMode,
     /// Content-inspection workers. Zero selects the available parallelism.
     pub parallelism: usize,
     /// Low-level traversal policy.
@@ -54,6 +62,7 @@ impl Default for ScanOptions {
             standard_skips: StandardSkips::Enabled,
             hash_file_contents: true,
             detect_binary_files: true,
+            evidence: EvidenceMode::Complete,
             parallelism: 0,
             walk: WalkOptions::default().with_metadata(true),
         }
@@ -101,6 +110,13 @@ impl ScanOptions {
     pub fn metadata_only(mut self) -> Self {
         self.hash_file_contents = false;
         self.detect_binary_files = false;
+        self
+    }
+
+    /// Keeps only the selected manifest and warnings, without skip evidence.
+    #[must_use]
+    pub const fn selected_files_only(mut self) -> Self {
+        self.evidence = EvidenceMode::SelectedFiles;
         self
     }
 

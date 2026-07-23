@@ -34,7 +34,9 @@ struct IgnoreLayer {
 struct RuleSet {
     rules: Vec<IgnoreRule>,
     exact_anywhere: HashMap<String, Vec<usize>>,
-    complex: Vec<usize>,
+    prefixes: HashMap<u8, Vec<usize>>,
+    suffixes: HashMap<u8, Vec<usize>>,
+    generic: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -165,8 +167,12 @@ impl RuleSet {
                 .entry(rule.pattern.clone())
                 .or_default()
                 .push(index);
+        } else if let Some(key) = rule.matcher.prefix_key() {
+            self.prefixes.entry(key).or_default().push(index);
+        } else if let Some(key) = rule.matcher.suffix_key(&rule.pattern) {
+            self.suffixes.entry(key).or_default().push(index);
         } else {
-            self.complex.push(index);
+            self.generic.push(index);
         }
         self.rules.push(rule);
     }
@@ -196,15 +202,44 @@ impl RuleSet {
         {
             best = Some(index);
         }
-        for &index in self.complex.iter().rev() {
+        best = self.best_match(&self.generic, path, is_directory, best);
+        let name_prefix = name.as_bytes().first();
+        if let Some(indices) = name_prefix.and_then(|key| self.prefixes.get(key)) {
+            best = self.best_match(indices, path, is_directory, best);
+        }
+        if let Some(path_prefix) = path.as_bytes().first()
+            && Some(path_prefix) != name_prefix
+            && let Some(indices) = self.prefixes.get(path_prefix)
+        {
+            best = self.best_match(indices, path, is_directory, best);
+        }
+        if let Some(indices) = path
+            .as_bytes()
+            .last()
+            .and_then(|key| self.suffixes.get(key))
+        {
+            best = self.best_match(indices, path, is_directory, best);
+        }
+        best.map(|index| self.rules[index].action)
+    }
+
+    fn best_match(
+        &self,
+        indices: &[usize],
+        path: &str,
+        is_directory: bool,
+        mut best: Option<usize>,
+    ) -> Option<usize> {
+        for &index in indices.iter().rev() {
             if best.is_some_and(|best| index <= best) {
                 break;
             }
             if self.rules[index].matches_exact(path, is_directory) {
-                return Some(self.rules[index].action);
+                best = Some(index);
+                break;
             }
         }
-        best.map(|index| self.rules[index].action)
+        best
     }
 }
 
