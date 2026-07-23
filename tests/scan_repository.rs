@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use weavatrix_scan::{ScanOptions, Scanner, SkipKind};
 
@@ -189,12 +190,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "weavatrix-scan-test-{}-{nonce}",
+            "weavatrix-scan-test-{}-{nonce}-{sequence}",
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();

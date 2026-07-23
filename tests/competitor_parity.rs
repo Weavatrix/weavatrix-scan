@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use support::build_scan_corpus;
 use walkdir::WalkDir;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use weavatrix_scan::WalkSkipReason;
 use weavatrix_scan::{
     ParallelWalker, ScanOptions, Scanner, SkipKind, StandardSkips, WalkOptions, Walker,
