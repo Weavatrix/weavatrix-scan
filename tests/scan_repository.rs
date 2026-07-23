@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use weavatrix_scan::{ScanOptions, Scanner, SkipKind};
 
@@ -66,6 +67,28 @@ fn reports_oversized_and_binary_files_without_reading_them_as_sources() {
             .skipped
             .iter()
             .any(|entry| { entry.relative == "binary.rs" && entry.kind == SkipKind::Binary })
+    );
+}
+
+#[test]
+fn safe_discovery_detects_binary_without_hashing_content() {
+    let fixture = Fixture::new();
+    fixture.write("text.rs", "pub fn run() {}\n");
+    fs::write(fixture.root.join("binary.rs"), [0, 1, 2, 3]).unwrap();
+
+    let mut options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .with_parallelism(1);
+    options.hash_file_contents = false;
+    let report = Scanner::new(&fixture.root).options(options).scan().unwrap();
+
+    assert_eq!(relative_files(&report), ["text.rs"]);
+    assert_eq!(report.files[0].content_hash, None);
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|entry| entry.relative == "binary.rs" && entry.kind == SkipKind::Binary)
     );
 }
 
@@ -167,12 +190,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "weavatrix-scan-test-{}-{nonce}",
+            "weavatrix-scan-test-{}-{nonce}-{sequence}",
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();

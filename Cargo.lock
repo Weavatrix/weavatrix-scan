@@ -276,13 +276,14 @@ dependencies = [
 
 [[package]]
 name = "weavatrix-scan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ignore",
  "jwalk",
  "serde",
  "serde_json",
  "walkdir",
+ "winapi-util",
 ]
 
 [[package]]

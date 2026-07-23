@@ -1,10 +1,11 @@
-use crate::config::ScanOptions;
+use crate::config::{EvidenceMode, ScanOptions};
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
-use crate::ignore::{IgnoreRules, load_ignore_file, skip_ignored};
-use crate::path::RevisionHasher;
+use crate::ignore::{IgnoreRules, build_child_rules, skip_ignored};
+use crate::path::normalized_relative_path;
 use crate::report::{ScanReport, ScannedFile, SkipKind};
-use std::ffi::OsStr;
+use crate::scan_finalize::finalize_report;
+use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason, Walker};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,8 +33,8 @@ impl Scanner {
     ///
     /// # Errors
     ///
-    /// Returns an error when the root cannot be canonicalized/read or selected
-    /// file metadata becomes unavailable during the scan.
+    /// Returns an error when the root cannot be canonicalized/read, or when a
+    /// local error occurs under `ErrorPolicy::Abort`.
     pub fn scan(self) -> Result<ScanReport> {
         scan_repository_with_options(&self.root, &self.options)
     }
@@ -43,8 +44,8 @@ impl Scanner {
 ///
 /// # Errors
 ///
-/// Returns an error when the root cannot be canonicalized/read or selected file
-/// metadata becomes unavailable during the scan.
+/// Returns an error when the root cannot be canonicalized/read, or when a local
+/// error occurs under `ErrorPolicy::Abort`.
 pub fn scan_repository(root: impl AsRef<Path>) -> Result<ScanReport> {
     scan_repository_with_options(root.as_ref(), &ScanOptions::default())
 }
@@ -57,189 +58,238 @@ fn scan_repository_with_options(root: &Path, options: &ScanOptions) -> Result<Sc
         return Err(Error::InvalidRoot(canonical));
     }
 
-    let mut report = ScanReport::new(canonical.clone());
-    walk_directory(
-        &canonical,
-        &canonical,
-        "",
-        &IgnoreRules::default(),
-        options,
-        &mut report,
-    )?;
+    let mut report = ScanReport::new(
+        canonical.clone(),
+        options.evidence == EvidenceMode::Complete,
+    );
+    let mut walker = Walker::with_options(&canonical, options.walk_options())
+        .map_err(walker_error_into_scan_error)?;
+    let mut directory_rules = Vec::new();
+    while let Some(item) = walker.next() {
+        match item {
+            Ok(entry) => process_entry(
+                &entry,
+                options,
+                &mut report,
+                &mut directory_rules,
+                &mut walker,
+            )?,
+            Err(error) => record_walk_error(error, &canonical, options, &mut report)?,
+        }
+    }
     let inspected = inspect_files(std::mem::take(&mut report.files), options)?;
     report.files = inspected.files;
     report.skipped.extend(inspected.skipped);
-    report
-        .files
-        .sort_unstable_by(|left, right| left.relative.cmp(&right.relative));
-    report
-        .skipped
-        .sort_unstable_by(|left, right| left.relative.cmp(&right.relative));
-    report.revision = revision_for(&report.files);
+    if !inspected.warnings.is_empty() {
+        report.complete = false;
+        report.warnings.extend(inspected.warnings);
+    }
+    finalize_report(&mut report);
     Ok(report)
 }
 
-fn walk_directory(
-    root: &Path,
-    directory: &Path,
-    relative_directory: &str,
-    inherited_rules: &IgnoreRules,
-    options: &ScanOptions,
-    report: &mut ScanReport,
-) -> Result<()> {
-    let read_dir = fs::read_dir(directory).map_err(|source| Error::io(directory, source))?;
-    if options.ignore_files.is_empty() {
-        for entry in read_dir {
-            let entry = entry.map_err(|source| Error::io(directory, source))?;
-            process_entry(
-                &entry,
-                root,
-                relative_directory,
-                inherited_rules,
-                options,
-                report,
-            )?;
-        }
-        return Ok(());
-    }
-    let entries = read_dir
-        .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|source| Error::io(directory, source))?;
-    let ignore_paths = options
-        .ignore_files
-        .iter()
-        .filter_map(|ignore_name| {
-            entries
-                .iter()
-                .find(|entry| entry.file_name() == OsStr::new(ignore_name))
-                .map(std::fs::DirEntry::path)
-        })
-        .collect::<Vec<_>>();
-    if ignore_paths.is_empty() {
-        for entry in entries {
-            process_entry(
-                &entry,
-                root,
-                relative_directory,
-                inherited_rules,
-                options,
-                report,
-            )?;
-        }
-        return Ok(());
-    }
-    let mut rules = inherited_rules.clone();
-    for ignore_path in ignore_paths {
-        load_ignore_file(&ignore_path, relative_directory, &mut rules, report);
-    }
-
-    for entry in entries {
-        process_entry(&entry, root, relative_directory, &rules, options, report)?;
-    }
-    Ok(())
-}
-
 fn process_entry(
-    entry: &fs::DirEntry,
-    root: &Path,
-    relative_directory: &str,
-    rules: &IgnoreRules,
+    entry: &WalkEntry,
     options: &ScanOptions,
     report: &mut ScanReport,
+    directory_rules: &mut Vec<(PathBuf, IgnoreRules)>,
+    walker: &mut Walker,
 ) -> Result<()> {
-    let name = entry.file_name();
-    let name_text = name.to_string_lossy();
-    let relative = join_relative(relative_directory, &name_text);
-    let file_type = entry
-        .file_type()
-        .map_err(|source| Error::io(entry.path(), source))?;
-    if file_type.is_symlink() {
+    let relative_path = entry.relative_path();
+    let relative = normalized_relative_path(relative_path);
+    if entry.depth() == 0 {
+        if let Some(reason) = entry.skip_reason() {
+            report.skip(".".to_owned(), skip_kind(reason), None);
+            return Ok(());
+        }
+        let rules = load_ignore_files(entry.path(), "", options, &IgnoreRules::default(), report)?;
+        directory_rules.push((PathBuf::new(), rules));
+        return Ok(());
+    }
+    if entry.is_symlink() && !options.walk.follow_links {
         report.skip(relative, SkipKind::Symlink, None);
         return Ok(());
     }
-    if file_type.is_dir() {
-        return process_directory(entry, root, &relative, rules, options, report);
-    }
-    if !file_type.is_file() || skip_ignored(report, &relative, false, rules) {
+    if let Some(reason) = entry.skip_reason() {
+        report.skip(relative, skip_kind(reason), None);
         return Ok(());
     }
-    process_file(entry, root, relative, options, report)
-}
 
-fn process_directory(
-    entry: &fs::DirEntry,
-    root: &Path,
-    relative: &str,
-    rules: &IgnoreRules,
-    options: &ScanOptions,
-    report: &mut ScanReport,
-) -> Result<()> {
-    if options.should_skip_directory(&entry.file_name().to_string_lossy()) {
-        report.skip(relative.to_owned(), SkipKind::StandardDirectory, None);
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+    while directory_rules
+        .last()
+        .is_some_and(|(directory, _)| directory != parent)
+    {
+        directory_rules.pop();
+    }
+    if entry.is_dir() {
+        if options.should_skip_directory(entry.file_name()) {
+            walker.skip_current_dir();
+            report.skip(relative, SkipKind::StandardDirectory, None);
+            return Ok(());
+        }
+        let inherited_rules = directory_rules
+            .last()
+            .map(|(_, rules)| rules)
+            .expect("root ignore rules are present");
+        if skip_ignored(report, &relative, true, inherited_rules) {
+            walker.skip_current_dir();
+            return Ok(());
+        }
+        let rules = load_ignore_files(entry.path(), &relative, options, inherited_rules, report)?;
+        directory_rules.push((relative_path.to_path_buf(), rules));
         return Ok(());
     }
-    if skip_ignored(report, relative, true, rules) {
+    if !entry.is_file() {
         return Ok(());
     }
-    let path = entry.path();
-    if !path.starts_with(root) {
-        report.skip(relative.to_owned(), SkipKind::PathEscape, None);
+    let inherited_rules = directory_rules
+        .last()
+        .map(|(_, rules)| rules)
+        .expect("root ignore rules are present");
+    if skip_ignored(report, &relative, false, inherited_rules) {
         return Ok(());
     }
-    walk_directory(root, &path, relative, rules, options, report)
+    process_file(entry, relative, options, report)
 }
 
 fn process_file(
-    entry: &fs::DirEntry,
-    root: &Path,
+    entry: &WalkEntry,
     relative: String,
     options: &ScanOptions,
     report: &mut ScanReport,
 ) -> Result<()> {
     let path = entry.path();
-    if !options.accepts_extension(&path) {
+    if !options.accepts_extension(path) {
         report.skip(relative, SkipKind::Extension, None);
         return Ok(());
     }
-    if !path.starts_with(root) {
-        report.skip(relative, SkipKind::PathEscape, None);
-        return Ok(());
-    }
-    let metadata = entry
-        .metadata()
-        .map_err(|source| Error::io(&path, source))?;
-    if metadata.len() > options.max_file_bytes {
+    let bytes = match entry.bytes() {
+        Some(bytes) => bytes,
+        None => match fs::metadata(path) {
+            Ok(metadata) => metadata.len(),
+            Err(source) => {
+                return record_local_io_error(
+                    path,
+                    relative,
+                    WalkOperation::ReadMetadata,
+                    source,
+                    options,
+                    report,
+                );
+            }
+        },
+    };
+    if bytes > options.max_file_bytes {
         report.skip(
             relative,
             SkipKind::Oversized,
-            Some(format!("{} bytes", metadata.len())),
+            Some(format!("{bytes} bytes")),
         );
         return Ok(());
     }
     report.files.push(ScannedFile {
-        absolute: path,
+        absolute: path.to_path_buf(),
         relative,
-        bytes: metadata.len(),
+        bytes,
         content_hash: None,
     });
     Ok(())
 }
 
-fn join_relative(base: &str, name: &str) -> String {
-    if base.is_empty() {
-        name.to_owned()
+fn load_ignore_files(
+    directory: &Path,
+    relative: &str,
+    options: &ScanOptions,
+    inherited: &IgnoreRules,
+    report: &mut ScanReport,
+) -> Result<IgnoreRules> {
+    let (rules, errors) = build_child_rules(
+        directory,
+        relative,
+        &options.ignore_files,
+        options.ignore_case_insensitive,
+        inherited,
+    );
+    for source in errors {
+        if options.walk.error_policy == ErrorPolicy::Abort {
+            return Err(Error::io(
+                directory,
+                std::io::Error::new(source.kind(), source),
+            ));
+        }
+        report.warn(
+            Some(relative.to_owned()),
+            format!("could not load ignore rules: {source}"),
+        );
+    }
+    Ok(rules)
+}
+
+fn record_walk_error(
+    error: WalkError,
+    root: &Path,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+) -> Result<()> {
+    if options.walk.error_policy == ErrorPolicy::Abort {
+        return Err(walker_error_into_scan_error(error));
+    }
+    let relative = error.path().strip_prefix(root).map_or_else(
+        |_| normalized_relative_path(error.path()),
+        normalized_relative_path,
+    );
+    let relative = if relative.is_empty() {
+        ".".to_owned()
     } else {
-        format!("{base}/{name}")
+        relative
+    };
+    let message = format!(
+        "{}: {}",
+        operation_label(error.operation()),
+        error.io_error()
+    );
+    report.skip(relative.clone(), SkipKind::IoError, Some(message.clone()));
+    report.warn(Some(relative), message);
+    Ok(())
+}
+
+fn record_local_io_error(
+    path: &Path,
+    relative: String,
+    operation: WalkOperation,
+    source: std::io::Error,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+) -> Result<()> {
+    if options.walk.error_policy == ErrorPolicy::Abort {
+        return Err(Error::io(path, source));
+    }
+    let message = format!("{}: {source}", operation_label(operation));
+    report.skip(relative.clone(), SkipKind::IoError, Some(message.clone()));
+    report.warn(Some(relative), message);
+    Ok(())
+}
+
+const fn skip_kind(reason: WalkSkipReason) -> SkipKind {
+    match reason {
+        WalkSkipReason::MaxDepth => SkipKind::MaxDepth,
+        WalkSkipReason::FileSystemBoundary => SkipKind::FileSystemBoundary,
+        WalkSkipReason::PathEscape => SkipKind::PathEscape,
+        WalkSkipReason::SymlinkLoop => SkipKind::SymlinkLoop,
     }
 }
 
-fn revision_for(files: &[ScannedFile]) -> String {
-    let mut revision = RevisionHasher::new();
-    for file in files {
-        revision.write(file.relative.as_bytes());
-        revision.write(&[0]);
-        revision.write(file.content_hash.as_deref().unwrap_or("").as_bytes());
-        revision.write(&[0xff]);
+const fn operation_label(operation: WalkOperation) -> &'static str {
+    match operation {
+        WalkOperation::Canonicalize => "canonicalize",
+        WalkOperation::ReadDirectory => "read directory",
+        WalkOperation::ReadEntry => "read entry",
+        WalkOperation::ReadMetadata => "read metadata",
     }
-    revision.finish()
+}
+
+fn walker_error_into_scan_error(error: WalkError) -> Error {
+    let (path, source) = error.into_parts();
+    Error::io(path, source)
 }

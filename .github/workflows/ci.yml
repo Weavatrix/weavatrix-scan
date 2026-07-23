@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust 1.88
@@ -42,14 +42,28 @@ jobs:
       - name: Check all targets
         run: cargo +1.88.0 check --all-targets --locked
 
+  platform-tests:
+    name: Platform tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Run tests
+        run: cargo +stable test --all-features --locked
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+        run: rustup toolchain install stable --profile minimal --component llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Check test coverage
-        run: cargo tarpaulin --workspace --all-features --timeout 120 --fail-under 85
+        run: cargo llvm-cov --workspace --all-features --fail-under-lines 85

@@ -1,4 +1,6 @@
+use crate::walker::{ErrorPolicy, WalkOptions};
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::path::Path;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 1_500_000;
@@ -23,16 +25,28 @@ pub enum StandardSkips {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceMode {
+    Complete,
+    SelectedFiles,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub max_file_bytes: u64,
     pub extensions: BTreeSet<String>,
     pub ignore_files: Vec<String>,
+    /// Match ignore patterns without ASCII case sensitivity.
+    pub ignore_case_insensitive: bool,
     pub standard_skips: StandardSkips,
     pub hash_file_contents: bool,
     pub detect_binary_files: bool,
+    /// Record typed evidence for entries excluded by policy.
+    pub evidence: EvidenceMode,
     /// Content-inspection workers. Zero selects the available parallelism.
     pub parallelism: usize,
+    /// Low-level traversal policy.
+    pub walk: WalkOptions,
 }
 
 impl Default for ScanOptions {
@@ -44,10 +58,13 @@ impl Default for ScanOptions {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            ignore_case_insensitive: false,
             standard_skips: StandardSkips::Enabled,
             hash_file_contents: true,
             detect_binary_files: true,
+            evidence: EvidenceMode::Complete,
             parallelism: 0,
+            walk: WalkOptions::default().with_metadata(true),
         }
     }
 }
@@ -79,6 +96,12 @@ impl ScanOptions {
         self
     }
 
+    #[must_use]
+    pub const fn with_ignore_case_insensitive(mut self, enabled: bool) -> Self {
+        self.ignore_case_insensitive = enabled;
+        self
+    }
+
     /// Disables file-content reads for the fastest metadata-only discovery.
     ///
     /// The resulting report does not contain content hashes and may include
@@ -90,6 +113,13 @@ impl ScanOptions {
         self
     }
 
+    /// Keeps only the selected manifest and warnings, without skip evidence.
+    #[must_use]
+    pub const fn selected_files_only(mut self) -> Self {
+        self.evidence = EvidenceMode::SelectedFiles;
+        self
+    }
+
     /// Sets content-inspection workers. Zero restores automatic selection.
     #[must_use]
     pub const fn with_parallelism(mut self, parallelism: usize) -> Self {
@@ -97,8 +127,41 @@ impl ScanOptions {
         self
     }
 
-    pub(crate) fn should_skip_directory(&self, name: &str) -> bool {
-        self.standard_skips == StandardSkips::Enabled && DEFAULT_SKIP_DIRECTORIES.contains(&name)
+    #[must_use]
+    pub const fn with_max_depth(mut self, max_depth: Option<usize>) -> Self {
+        self.walk.max_depth = max_depth;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_open(mut self, max_open: usize) -> Self {
+        self.walk.max_open = if max_open == 0 { 1 } else { max_open };
+        self
+    }
+
+    #[must_use]
+    pub const fn with_same_file_system(mut self, enabled: bool) -> Self {
+        self.walk.same_file_system = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_follow_links(mut self, enabled: bool) -> Self {
+        self.walk.follow_links = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_error_policy(mut self, policy: ErrorPolicy) -> Self {
+        self.walk.error_policy = policy;
+        self
+    }
+
+    pub(crate) fn should_skip_directory(&self, name: &OsStr) -> bool {
+        self.standard_skips == StandardSkips::Enabled
+            && DEFAULT_SKIP_DIRECTORIES
+                .iter()
+                .any(|candidate| name == OsStr::new(candidate))
     }
 
     pub(crate) fn accepts_extension(&self, path: &Path) -> bool {
@@ -133,5 +196,9 @@ impl ScanOptions {
             self.parallelism
         };
         requested.min(file_count.div_ceil(128)).max(1)
+    }
+
+    pub(crate) const fn walk_options(&self) -> WalkOptions {
+        self.walk
     }
 }
