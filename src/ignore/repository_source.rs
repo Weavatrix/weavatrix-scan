@@ -103,7 +103,7 @@ impl RepositoryMatcher {
         Ok(())
     }
 
-    fn handle_errors(&mut self, errors: Vec<IgnoreError>) -> Result<()> {
+    pub(super) fn handle_errors(&mut self, errors: Vec<IgnoreError>) -> Result<()> {
         for source in errors {
             if self.error_policy == crate::walker::ErrorPolicy::Abort {
                 return Err(Error::io(

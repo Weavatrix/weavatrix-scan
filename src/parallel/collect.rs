@@ -20,6 +20,11 @@ pub(super) fn collect_lane(
         let mut worker_options = options;
         worker_options.error_policy = ErrorPolicy::Continue;
         worker_options.max_open = 1;
+        worker_options.min_depth = if options.same_file_system {
+            options.min_depth.saturating_sub(task.depth)
+        } else {
+            options.min_depth
+        };
         worker_options.max_depth = if options.same_file_system {
             options
                 .max_depth
@@ -99,6 +104,7 @@ pub(super) struct ShallowWalk {
 pub(super) fn collect_shallow(root: &Path, options: WalkOptions) -> Result<ShallowWalk, WalkError> {
     let mut shallow_options = options;
     shallow_options.error_policy = ErrorPolicy::Continue;
+    shallow_options.min_depth = 0;
     shallow_options.max_depth = Some(options.max_depth.unwrap_or(1).min(1));
     let shallow = Walker::with_options(root, shallow_options)?;
     let canonical_root = Arc::new(shallow.root().to_path_buf());
@@ -120,7 +126,9 @@ pub(super) fn collect_shallow(root: &Path, options: WalkOptions) -> Result<Shall
                         depth: entry.depth(),
                     });
                 }
-                entries.push(entry);
+                if entry.depth() >= options.min_depth {
+                    entries.push(entry);
+                }
             }
             Err(error) => errors.push(error),
         }

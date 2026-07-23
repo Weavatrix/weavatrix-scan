@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod git;
 mod matcher;
+mod overrides;
 mod parser;
 mod repository;
 mod repository_source;
@@ -27,6 +28,24 @@ use repository_source::{add_rule_file, find_repository_root};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IgnoreFile {
     pub name: String,
+}
+
+/// Highest-precedence selection decision for a repository path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryMatch {
+    None,
+    Ignore,
+    Include,
+    OverrideIgnore,
+    OverrideInclude,
+    Hidden,
+}
+
+impl RepositoryMatch {
+    #[must_use]
+    pub const fn is_ignored(self) -> bool {
+        matches!(self, Self::Ignore | Self::OverrideIgnore | Self::Hidden)
+    }
 }
 
 const SOURCE_COUNT: usize = 6;
@@ -176,7 +195,7 @@ pub(crate) fn build_child_rules(
     (result, errors, evidence)
 }
 
-pub(crate) fn is_ignored(path: &str, is_directory: bool, rules: &IgnoreRules) -> bool {
+fn match_rules(path: &str, is_directory: bool, rules: &IgnoreRules) -> Option<RuleAction> {
     let mut ancestor_included = false;
     for source in rules.layers.iter().rev() {
         let mut layer = source.as_deref();
@@ -185,16 +204,18 @@ pub(crate) fn is_ignored(path: &str, is_directory: bool, rules: &IgnoreRules) ->
                 && let Some(rule_match) = current.rules.matches(candidate, is_directory)
             {
                 match rule_match {
-                    RuleMatch::Exact(action) => return action == RuleAction::Ignore,
+                    RuleMatch::Exact(action) => return Some(action),
                     RuleMatch::Ancestor(RuleAction::Include) => ancestor_included = true,
-                    RuleMatch::Ancestor(RuleAction::Ignore) if !ancestor_included => return true,
+                    RuleMatch::Ancestor(RuleAction::Ignore) if !ancestor_included => {
+                        return Some(RuleAction::Ignore);
+                    }
                     RuleMatch::Ancestor(RuleAction::Ignore) => {}
                 }
             }
             layer = current.parent.as_deref();
         }
     }
-    false
+    ancestor_included.then_some(RuleAction::Include)
 }
 
 fn candidate_for_base<'a>(path: &'a str, base: &str) -> Option<&'a str> {

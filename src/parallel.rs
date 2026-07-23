@@ -65,7 +65,8 @@ impl ParallelWalker {
     /// # Panics
     ///
     /// Panics if an internal worker panics or shared traversal state is poisoned.
-    pub fn walk(self) -> Result<ParallelWalkReport, WalkError> {
+    pub fn walk(mut self) -> Result<ParallelWalkReport, WalkError> {
+        self.options = self.options.normalized();
         if self.options.follow_links {
             return collect_serial(&self.root, self.options);
         }

@@ -12,6 +12,10 @@ All notable changes to this project are documented here.
   with typed partial-report termination evidence.
 - Reject repository-local ignore symlinks and keep matcher queries scoped to
   the configured scan root.
+- Add independent local-ignore source switches, Git-repository gating,
+  high-precedence override globs, and typed hidden-file filtering.
+- Add minimum-depth parity across serial walking, parallel collection,
+  streaming visitors, and ignore-aware scanning.
 - Preserve parallel discovery-task order independently of worker completion
   while retaining round-robin load balancing.
 - Replace the serialized idle-worker receiver with a condition-variable job
