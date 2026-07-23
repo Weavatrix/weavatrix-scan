@@ -16,9 +16,10 @@ pub struct ParallelWalkReport {
 /// Top-level directories are distributed across bounded serial walkers. This
 /// keeps the serial `Walker` API streaming and gives broad trees an explicit
 /// parallel mode without making scanner output order nondeterministic.
-/// Parallel report order is intentionally unspecified; callers that need a
-/// stable manifest must sort, as `Scanner` does. Link-following falls back to
-/// the serial walker so cycle detection has one authoritative seen set.
+/// Worker completion order does not affect report order. Callers that need a
+/// cross-filesystem stable manifest must still sort, as `Scanner` does.
+/// Link-following falls back to the serial walker so cycle detection has one
+/// authoritative seen set.
 pub struct ParallelWalker {
     root: PathBuf,
     options: WalkOptions,
@@ -85,25 +86,57 @@ impl ParallelWalker {
             .min(self.options.max_open.max(1))
             .min(tasks.len())
             .max(1);
+        let task_count = tasks.len();
         let mut lanes = (0..worker_count)
-            .map(|_| Vec::new())
-            .collect::<Vec<Vec<DirectoryTask>>>();
+            .map(|_| Vec::<DirectoryTask>::new())
+            .collect::<Vec<_>>();
         for (index, task) in tasks.into_iter().enumerate() {
             lanes[index % worker_count].push(task);
         }
         let (sender, receiver) = mpsc::channel();
-        for lane in lanes {
+        for (index, lane) in lanes.into_iter().enumerate() {
             let sender = sender.clone();
             let root = Arc::clone(&parallel_root);
             pool.execute(move || {
                 let report = collect_lane(lane, self.options, &root);
-                let _ = sender.send(report);
+                let _ = sender.send((index, report));
             });
         }
         drop(sender);
-        for mut report in receiver {
-            entries.append(&mut report.entries);
-            errors.append(&mut report.errors);
+        let mut completed = (0..worker_count).map(|_| None).collect::<Vec<_>>();
+        for (index, report) in receiver {
+            completed[index] = Some(report);
+        }
+        let (additional_entries, additional_errors) =
+            completed
+                .iter()
+                .flatten()
+                .fold((0, 0), |(entries, errors), lane| {
+                    (
+                        entries + lane.report.entries.len(),
+                        errors + lane.report.errors.len(),
+                    )
+                });
+        entries.reserve(additional_entries);
+        errors.reserve(additional_errors);
+        let mut lanes = completed
+            .into_iter()
+            .map(|lane| {
+                let lane = lane.expect("every parallel lane reports completion");
+                (
+                    lane.report.entries.into_iter(),
+                    lane.report.errors.into_iter(),
+                    lane.segments,
+                )
+            })
+            .collect::<Vec<_>>();
+        for task_index in 0..task_count {
+            let (lane_entries, lane_errors, segments) = &mut lanes[task_index % worker_count];
+            let segment = segments
+                .pop_front()
+                .expect("every directory task has an output segment");
+            entries.extend(lane_entries.by_ref().take(segment.entries));
+            errors.extend(lane_errors.by_ref().take(segment.errors));
         }
         if self.options.error_policy == ErrorPolicy::Abort && !errors.is_empty() {
             return Err(errors.remove(0));
@@ -116,12 +149,15 @@ fn collect_lane(
     tasks: Vec<DirectoryTask>,
     options: WalkOptions,
     parallel_root: &Arc<PathBuf>,
-) -> ParallelWalkReport {
+) -> LaneReport {
     let mut report = ParallelWalkReport {
         entries: Vec::new(),
         errors: Vec::new(),
     };
+    let mut segments = VecDeque::with_capacity(tasks.len());
     for task in tasks {
+        let entry_start = report.entries.len();
+        let error_start = report.errors.len();
         let mut worker_options = options;
         worker_options.error_policy = ErrorPolicy::Continue;
         worker_options.max_open = 1;
@@ -133,15 +169,13 @@ fn collect_lane(
             options.max_depth
         };
         if options.same_file_system {
-            let walker = match Walker::with_options(&task.path, worker_options) {
-                Ok(walker) => walker,
+            match Walker::with_options(&task.path, worker_options) {
+                Ok(walker) => collect_rebased(walker, parallel_root, task.depth, &mut report),
                 Err(mut error) => {
                     error.rebase_depth(task.depth);
                     report.errors.push(error);
-                    continue;
                 }
-            };
-            collect_rebased(walker, parallel_root, task.depth, &mut report);
+            }
         } else {
             let walker =
                 Walker::from_known_directory(parallel_root, task.path, task.depth, worker_options);
@@ -152,8 +186,12 @@ fn collect_lane(
                 }
             }
         }
+        segments.push_back(TaskSegment {
+            entries: report.entries.len() - entry_start,
+            errors: report.errors.len() - error_start,
+        });
     }
-    report
+    LaneReport { report, segments }
 }
 
 fn collect_rebased(
@@ -180,6 +218,16 @@ fn collect_rebased(
 struct DirectoryTask {
     path: PathBuf,
     depth: usize,
+}
+
+struct TaskSegment {
+    entries: usize,
+    errors: usize,
+}
+
+struct LaneReport {
+    report: ParallelWalkReport,
+    segments: VecDeque<TaskSegment>,
 }
 
 struct ShallowWalk {

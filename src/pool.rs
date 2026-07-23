@@ -1,10 +1,16 @@
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub(crate) struct ThreadPool {
-    sender: mpsc::Sender<Job>,
+    queue: Arc<JobQueue>,
     workers: usize,
+}
+
+struct JobQueue {
+    jobs: Mutex<VecDeque<Job>>,
+    ready: Condvar,
 }
 
 impl ThreadPool {
@@ -18,34 +24,45 @@ impl ThreadPool {
     }
 
     pub(crate) fn execute(&self, job: impl FnOnce() + Send + 'static) {
-        self.sender
-            .send(Box::new(job))
-            .expect("global scan thread pool is alive");
+        self.queue
+            .jobs
+            .lock()
+            .expect("global scan job queue is not poisoned")
+            .push_back(Box::new(job));
+        self.queue.ready.notify_one();
     }
 
     fn new() -> Self {
         let workers = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        let (sender, receiver) = mpsc::channel::<Job>();
-        let receiver = std::sync::Arc::new(Mutex::new(receiver));
+        let queue = Arc::new(JobQueue {
+            jobs: Mutex::new(VecDeque::new()),
+            ready: Condvar::new(),
+        });
         for index in 0..workers {
-            let receiver = std::sync::Arc::clone(&receiver);
+            let queue = Arc::clone(&queue);
             std::thread::Builder::new()
                 .name(format!("weavatrix-scan-{index}"))
-                .spawn(move || worker_loop(&receiver))
+                .spawn(move || worker_loop(&queue))
                 .expect("scan worker thread can be created");
         }
-        Self { sender, workers }
+        Self { queue, workers }
     }
 }
 
-fn worker_loop(receiver: &Mutex<mpsc::Receiver<Job>>) {
+fn worker_loop(queue: &JobQueue) {
     loop {
-        let job = receiver
-            .lock()
-            .expect("scan job queue is not poisoned")
-            .recv();
-        let Ok(job) = job else {
-            break;
+        let job = {
+            let mut jobs = queue
+                .jobs
+                .lock()
+                .expect("global scan job queue is not poisoned");
+            while jobs.is_empty() {
+                jobs = queue
+                    .ready
+                    .wait(jobs)
+                    .expect("global scan job queue is not poisoned");
+            }
+            jobs.pop_front().expect("job queue is not empty")
         };
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
     }
