@@ -25,7 +25,7 @@ fn scan_report_round_trips_through_json() {
     let _ = std::fs::remove_dir_all(fixture);
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_report_paths_round_trip_losslessly() {
     use std::ffi::OsString;
