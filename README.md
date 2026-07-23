@@ -58,14 +58,14 @@ must be reproducible and explainable.
 
 ```toml
 [dependencies]
-weavatrix-scan = "0.1"
+weavatrix-scan = "0.2"
 ```
 
 Enable serialization only when needed:
 
 ```toml
 [dependencies]
-weavatrix-scan = { version = "0.1", features = ["serde"] }
+weavatrix-scan = { version = "0.2", features = ["serde"] }
 ```
 
 ## Quick start
@@ -382,6 +382,9 @@ Run the competitor comparison:
 cargo bench --locked --bench compare_competitors
 ```
 
+The `Competitor benchmarks` workflow runs the same output-equivalent comparison
+on Ubuntu, Windows, and macOS for scanner or benchmark changes.
+
 Run exact selected-path parity on a real repository:
 
 ```powershell
@@ -395,24 +398,25 @@ measured samples, then reports the median. Raw walkers must produce the same
 fully sorted native relative-path set; the ignore-aware comparison additionally
 checks the same normalized path-and-size manifest.
 
-Sample result on Windows 11, Rust 1.97.1, warm filesystem cache:
+Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
+2026-07-24 against `ignore` 0.4.31, `walkdir` 2.5.0, and `jwalk` 0.8.1:
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 7.8 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 5.1 ms |
-| Raw paths | ignore | 6,004 | 9.9 ms |
-| Raw paths | walkdir | 6,004 | 9.9 ms |
-| Raw paths | jwalk | 6,004 | 7.6 ms |
-| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 24.1 ms |
-| Ignore-aware manifest | ignore | 6,001 | 31.7 ms |
-| Rich manifest | weavatrix `Scanner` | 6,000 | 91.3 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 7.7 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 5.0 ms |
+| Raw paths | ignore | 6,004 | 10.1 ms |
+| Raw paths | walkdir | 6,004 | 9.5 ms |
+| Raw paths | jwalk | 6,004 | 7.8 ms |
+| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 20.5 ms |
+| Ignore-aware manifest | ignore | 6,001 | 24.1 ms |
+| Rich manifest | weavatrix `Scanner` | 6,000 | 92.8 ms |
 
-This is the median of three independent output-equivalent Windows benchmark
+This is the median of five independent output-equivalent Windows benchmark
 processes; each process itself reports the median of 11 interleaved samples
 after two warmups. `Walker` and `ParallelWalker` beat `walkdir` on this corpus.
-`ParallelWalker` is about 34% faster than `jwalk`, while the selected-manifest
-`Scanner` is about 24% faster than `ignore`. The comparable scanner row omits
+`ParallelWalker` is about 36% faster than `jwalk`, while the selected-manifest
+`Scanner` is about 15% faster than `ignore`. The comparable scanner row omits
 skip evidence on both sides. The rich row additionally records typed evidence,
 reads content, detects binaries, hashes sources, and computes a deterministic
 revision.
