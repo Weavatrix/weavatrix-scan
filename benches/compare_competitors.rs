@@ -8,7 +8,9 @@ use support::{
     measure_group, print_measurement,
 };
 use walkdir::WalkDir;
-use weavatrix_scan::{ScanOptions, Scanner, StandardSkips};
+use weavatrix_scan::{
+    ParallelWalker, ScanOptions, Scanner, StandardSkips, WalkEntry, WalkOptions, Walker,
+};
 
 fn main() {
     let fixture = Fixture::new();
@@ -20,19 +22,22 @@ fn main() {
 }
 
 fn benchmark_raw_discovery(fixture: &Fixture) {
-    let expected = weavatrix_manifest(&fixture.root, false);
+    let expected = walker_paths(&fixture.root);
     let mut cases = vec![
-        BenchmarkCase::new("weavatrix-scan", || {
-            checked_len(&weavatrix_manifest(&fixture.root, false), &expected)
+        BenchmarkCase::new("weavatrix-walker", || {
+            checked_path_len(&walker_paths(&fixture.root), &expected)
+        }),
+        BenchmarkCase::new("weavatrix-parallel", || {
+            checked_path_len(&parallel_paths(&fixture.root), &expected)
         }),
         BenchmarkCase::new("ignore", || {
-            checked_len(&ignore_manifest(&fixture.root, false), &expected)
+            checked_path_len(&ignore_paths(&fixture.root), &expected)
         }),
         BenchmarkCase::new("walkdir", || {
-            checked_len(&walkdir_manifest(&fixture.root), &expected)
+            checked_path_len(&walkdir_paths(&fixture.root), &expected)
         }),
         BenchmarkCase::new("jwalk", || {
-            checked_len(&jwalk_manifest(&fixture.root), &expected)
+            checked_path_len(&jwalk_paths(&fixture.root), &expected)
         }),
     ];
     let results = measure_group(&mut cases);
@@ -73,6 +78,7 @@ fn benchmark_rich_manifest(fixture: &Fixture) {
 }
 
 type Manifest = Vec<(String, u64)>;
+type Paths = Vec<PathBuf>;
 
 fn checked_len(actual: &Manifest, expected: &Manifest) -> usize {
     assert_eq!(actual, expected);
@@ -95,6 +101,86 @@ fn weavatrix_manifest(root: &Path, respect_ignore_files: bool) -> Manifest {
         .into_iter()
         .map(|file| (file.relative, file.bytes))
         .collect()
+}
+
+fn checked_path_len(actual: &Paths, expected: &Paths) -> usize {
+    assert_eq!(actual, expected);
+    actual.len()
+}
+
+fn walker_paths(root: &Path) -> Paths {
+    let mut paths = Walker::with_options(root, WalkOptions::default())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(WalkEntry::is_file)
+        .filter(|entry| has_extension(entry.path()))
+        .map(|entry| entry.relative_path().to_path_buf())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths
+}
+
+fn parallel_paths(root: &Path) -> Paths {
+    let mut paths = ParallelWalker::new(root)
+        .walk()
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(WalkEntry::is_file)
+        .filter(|entry| has_extension(entry.path()))
+        .map(|entry| entry.relative_path().to_path_buf())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths
+}
+
+fn ignore_paths(root: &Path) -> Paths {
+    let mut builder = WalkBuilder::new(root);
+    builder.standard_filters(false);
+    relative_paths(
+        root,
+        builder
+            .build()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+            .filter(|entry| has_extension(entry.path()))
+            .map(ignore::DirEntry::into_path),
+    )
+}
+
+fn walkdir_paths(root: &Path) -> Paths {
+    relative_paths(
+        root,
+        WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| has_extension(entry.path()))
+            .map(walkdir::DirEntry::into_path),
+    )
+}
+
+fn jwalk_paths(root: &Path) -> Paths {
+    relative_paths(
+        root,
+        JWalkDir::new(root)
+            .sort(false)
+            .skip_hidden(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| has_extension(&entry.path()))
+            .map(|entry| entry.path()),
+    )
+}
+
+fn relative_paths(root: &Path, paths: impl Iterator<Item = PathBuf>) -> Paths {
+    let mut paths = paths
+        .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths
 }
 
 fn ignore_manifest(root: &Path, respect_ignore_files: bool) -> Manifest {
@@ -120,38 +206,6 @@ fn ignore_manifest(root: &Path, respect_ignore_files: bool) -> Manifest {
             .map(|entry| {
                 let bytes = entry.metadata().unwrap().len();
                 (entry.path().to_owned(), bytes)
-            }),
-    )
-}
-
-fn walkdir_manifest(root: &Path) -> Manifest {
-    manifest(
-        root,
-        WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .filter(|entry| has_extension(entry.path()))
-            .map(|entry| {
-                let bytes = entry.metadata().unwrap().len();
-                (entry.path().to_owned(), bytes)
-            }),
-    )
-}
-
-fn jwalk_manifest(root: &Path) -> Manifest {
-    manifest(
-        root,
-        JWalkDir::new(root)
-            .sort(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .filter(|entry| has_extension(&entry.path()))
-            .map(|entry| {
-                let bytes = entry.metadata().unwrap().len();
-                (entry.path(), bytes)
             }),
     )
 }

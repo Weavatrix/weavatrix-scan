@@ -70,6 +70,28 @@ fn reports_oversized_and_binary_files_without_reading_them_as_sources() {
 }
 
 #[test]
+fn safe_discovery_detects_binary_without_hashing_content() {
+    let fixture = Fixture::new();
+    fixture.write("text.rs", "pub fn run() {}\n");
+    fs::write(fixture.root.join("binary.rs"), [0, 1, 2, 3]).unwrap();
+
+    let mut options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .with_parallelism(1);
+    options.hash_file_contents = false;
+    let report = Scanner::new(&fixture.root).options(options).scan().unwrap();
+
+    assert_eq!(relative_files(&report), ["text.rs"]);
+    assert_eq!(report.files[0].content_hash, None);
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|entry| entry.relative == "binary.rs" && entry.kind == SkipKind::Binary)
+    );
+}
+
+#[test]
 fn metadata_only_skips_content_reads_and_content_hashes() {
     let fixture = Fixture::new();
     fs::write(fixture.root.join("binary.rs"), [0, 159, 146, 150]).unwrap();

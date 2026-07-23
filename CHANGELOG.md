@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.1 - 2026-07-23
+
+- Add iterative, lossless `Walker` and bounded `ParallelWalker` APIs.
+- Continue after local filesystem errors with typed partial evidence.
+- Add depth, open-handle, same-filesystem, and configurable symlink policies.
+- Detect followed symlink cycles with native Unix and Windows file identities.
+- Expand repository-local Git-ignore parity, diagnostics, and differential
+  tests, including nested precedence and non-UTF8 paths.
+- Remove per-entry shared-root contention and reuse a bounded worker pool.
+- Bring parallel traversal within the same performance tier as `jwalk` and
+  make ignore-aware scanning faster than `ignore` on the published benchmark.
+- Validate Rust 1.88 on Linux, Windows, and macOS.
+
 ## 0.1.0 - 2026-07-23
 
 - Initial MIT release.

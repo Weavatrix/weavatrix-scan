@@ -16,8 +16,8 @@ fn main() {
         "corpus=real root={} statistic=median runs=11 warmups=2",
         root.display()
     );
-    let ours = weavatrix_paths(&root);
-    let competitor = ignore_paths(&root);
+    let ours = weavatrix_manifest(&root);
+    let competitor = ignore_manifest(&root);
     if ours != competitor {
         let only_ours = ours
             .iter()
@@ -33,20 +33,8 @@ fn main() {
     assert_eq!(ours, competitor);
 
     let mut cases = vec![
-        BenchmarkCase::new("weavatrix-scan", || {
-            let mut options = ScanOptions::default()
-                .with_extensions(EXTENSIONS)
-                .metadata_only();
-            options.standard_skips = StandardSkips::Disabled;
-            options.max_file_bytes = u64::MAX;
-            Scanner::new(&root)
-                .options(options)
-                .scan()
-                .unwrap()
-                .files
-                .len()
-        }),
-        BenchmarkCase::new("ignore", || ignore_count(&root)),
+        BenchmarkCase::new("weavatrix-scan", || weavatrix_manifest(&root).len()),
+        BenchmarkCase::new("ignore", || ignore_manifest(&root).len()),
     ];
     let results = measure_group(&mut cases);
     assert_eq!(results[0].count, results[1].count);
@@ -55,7 +43,9 @@ fn main() {
     }
 }
 
-fn weavatrix_paths(root: &Path) -> Vec<String> {
+type Manifest = Vec<(String, u64)>;
+
+fn weavatrix_manifest(root: &Path) -> Manifest {
     let mut options = ScanOptions::default()
         .with_extensions(EXTENSIONS)
         .metadata_only();
@@ -67,11 +57,11 @@ fn weavatrix_paths(root: &Path) -> Vec<String> {
         .unwrap()
         .files
         .into_iter()
-        .map(|file| file.relative)
+        .map(|file| (file.relative, file.bytes))
         .collect()
 }
 
-fn ignore_paths(root: &Path) -> Vec<String> {
+fn ignore_manifest(root: &Path) -> Manifest {
     let mut builder = WalkBuilder::new(root);
     builder
         .add_custom_ignore_filename(".weavatrixignore")
@@ -86,12 +76,14 @@ fn ignore_paths(root: &Path) -> Vec<String> {
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
         .filter(|entry| has_extension(entry.path()))
         .map(|entry| {
-            entry
+            let bytes = entry.metadata().unwrap().len();
+            let relative = entry
                 .path()
                 .strip_prefix(root)
                 .unwrap()
                 .to_string_lossy()
-                .replace('\\', "/")
+                .replace('\\', "/");
+            (relative, bytes)
         })
         .collect::<Vec<_>>();
     paths.sort_unstable();
@@ -101,23 +93,6 @@ fn ignore_paths(root: &Path) -> Vec<String> {
 fn benchmark_root() -> PathBuf {
     std::env::var_os("WEAVATRIX_BENCH_ROOT")
         .map_or_else(|| std::env::current_dir().unwrap(), PathBuf::from)
-}
-
-fn ignore_count(root: &Path) -> usize {
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .add_custom_ignore_filename(".weavatrixignore")
-        .git_global(false)
-        .git_exclude(false)
-        .hidden(false)
-        .parents(false)
-        .require_git(false);
-    builder
-        .build()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
-        .filter(|entry| has_extension(entry.path()))
-        .count()
 }
 
 fn has_extension(path: &Path) -> bool {

@@ -128,7 +128,7 @@ impl Fixture {
         fs::write(root.join("binary.rs"), [0, 159, 146, 150]).unwrap();
 
         for directory_index in 0..DIRECTORIES {
-            let directory = root.join(format!("src/module_{directory_index:03}"));
+            let directory = root.join(format!("module_{directory_index:03}"));
             fs::create_dir_all(&directory).unwrap();
             for file_index in 0..FILES_PER_LANGUAGE {
                 for extension in EXTENSIONS {

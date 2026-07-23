@@ -1,14 +1,17 @@
 use crate::config::ScanOptions;
 use crate::error::{Error, Result};
 use crate::path::{RevisionHasher, looks_binary};
-use crate::report::{ScannedFile, SkipKind, SkippedEntry};
+use crate::report::{ScanWarning, ScannedFile, SkipKind, SkippedEntry};
+use crate::walker::ErrorPolicy;
 use std::fs;
+use std::io;
 use std::io::Read as _;
 use std::path::Path;
 
 pub(crate) struct InspectedFiles {
     pub(crate) files: Vec<ScannedFile>,
     pub(crate) skipped: Vec<SkippedEntry>,
+    pub(crate) warnings: Vec<ScanWarning>,
 }
 
 pub(crate) fn inspect_files(
@@ -19,6 +22,7 @@ pub(crate) fn inspect_files(
         return Ok(InspectedFiles {
             files,
             skipped: Vec::new(),
+            warnings: Vec::new(),
         });
     }
     let workers = options.worker_count(files.len());
@@ -44,11 +48,13 @@ pub(crate) fn inspect_files(
         let mut inspected = InspectedFiles {
             files: Vec::new(),
             skipped: Vec::new(),
+            warnings: Vec::new(),
         };
         for handle in handles {
             let chunk = handle.join().expect("content inspection worker panicked")?;
             inspected.files.extend(chunk.files);
             inspected.skipped.extend(chunk.skipped);
+            inspected.warnings.extend(chunk.warnings);
         }
         Ok(inspected)
     })
@@ -58,19 +64,40 @@ fn inspect_chunk(files: Vec<ScannedFile>, options: &ScanOptions) -> Result<Inspe
     let mut inspected = InspectedFiles {
         files: Vec::with_capacity(files.len()),
         skipped: Vec::new(),
+        warnings: Vec::new(),
     };
     for mut file in files {
         if options.hash_file_contents {
-            let bytes =
-                fs::read(&file.absolute).map_err(|source| Error::io(&file.absolute, source))?;
+            let bytes = match fs::read(&file.absolute) {
+                Ok(bytes) => bytes,
+                Err(source) => {
+                    record_io_error(&mut inspected, &file, "read file content", source, options)?;
+                    continue;
+                }
+            };
             if options.detect_binary_files && looks_binary(&bytes) {
                 inspected.skipped.push(binary_skip(file.relative));
                 continue;
             }
             file.content_hash = Some(hash_bytes(&bytes));
-        } else if options.detect_binary_files && file_looks_binary(&file.absolute)? {
-            inspected.skipped.push(binary_skip(file.relative));
-            continue;
+        } else if options.detect_binary_files {
+            match file_looks_binary(&file.absolute) {
+                Ok(true) => {
+                    inspected.skipped.push(binary_skip(file.relative));
+                    continue;
+                }
+                Ok(false) => {}
+                Err(source) => {
+                    record_io_error(
+                        &mut inspected,
+                        &file,
+                        "inspect file content",
+                        source,
+                        options,
+                    )?;
+                    continue;
+                }
+            }
         }
         inspected.files.push(file);
     }
@@ -91,11 +118,32 @@ fn hash_bytes(bytes: &[u8]) -> String {
     hasher.finish()
 }
 
-fn file_looks_binary(path: &Path) -> Result<bool> {
-    let mut file = fs::File::open(path).map_err(|source| Error::io(path, source))?;
+fn file_looks_binary(path: &Path) -> io::Result<bool> {
+    let mut file = fs::File::open(path)?;
     let mut buffer = [0; 8192];
-    let read = file
-        .read(&mut buffer)
-        .map_err(|source| Error::io(path, source))?;
+    let read = file.read(&mut buffer)?;
     Ok(looks_binary(&buffer[..read]))
+}
+
+fn record_io_error(
+    inspected: &mut InspectedFiles,
+    file: &ScannedFile,
+    operation: &str,
+    source: io::Error,
+    options: &ScanOptions,
+) -> Result<()> {
+    if options.walk.error_policy == ErrorPolicy::Abort {
+        return Err(Error::io(&file.absolute, source));
+    }
+    let message = format!("{operation}: {source}");
+    inspected.skipped.push(SkippedEntry {
+        relative: file.relative.clone(),
+        kind: SkipKind::IoError,
+        detail: Some(message.clone()),
+    });
+    inspected.warnings.push(ScanWarning {
+        relative: Some(file.relative.clone()),
+        message,
+    });
+    Ok(())
 }

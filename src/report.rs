@@ -3,6 +3,7 @@ use std::path::PathBuf;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScannedFile {
+    #[cfg_attr(feature = "serde", serde(with = "crate::path_serde"))]
     pub absolute: PathBuf,
     pub relative: String,
     pub bytes: u64,
@@ -10,15 +11,19 @@ pub struct ScannedFile {
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SkipKind {
     Binary,
+    FileSystemBoundary,
     Extension,
     Ignored,
+    IoError,
+    MaxDepth,
     Oversized,
     PathEscape,
     StandardDirectory,
     Symlink,
+    SymlinkLoop,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -39,11 +44,20 @@ pub struct ScanWarning {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanReport {
+    #[cfg_attr(feature = "serde", serde(with = "crate::path_serde"))]
     pub root: PathBuf,
     pub files: Vec<ScannedFile>,
     pub skipped: Vec<SkippedEntry>,
     pub warnings: Vec<ScanWarning>,
     pub revision: String,
+    /// False when local I/O or ignore-rule errors made evidence partial.
+    #[cfg_attr(feature = "serde", serde(default = "default_complete"))]
+    pub complete: bool,
+}
+
+#[cfg(feature = "serde")]
+const fn default_complete() -> bool {
+    true
 }
 
 impl ScanReport {
@@ -54,6 +68,7 @@ impl ScanReport {
             skipped: Vec::new(),
             warnings: Vec::new(),
             revision: String::new(),
+            complete: true,
         }
     }
 
@@ -66,6 +81,7 @@ impl ScanReport {
     }
 
     pub(crate) fn warn(&mut self, relative: Option<String>, message: impl Into<String>) {
+        self.complete = false;
         self.warnings.push(ScanWarning {
             relative,
             message: message.into(),
