@@ -7,6 +7,7 @@
 mod config;
 mod content;
 mod control;
+mod delta;
 mod error;
 mod glob;
 mod hidden;
@@ -29,6 +30,7 @@ mod walker;
 
 pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips};
 pub use control::CancellationToken;
+pub use delta::{DeltaQuality, ModifiedFile, RenamedFile, ScanDelta};
 pub use error::{Error, Result};
 pub use ignore::{IgnoreFile, RepositoryMatch, RepositoryMatcher};
 pub use parallel::{
