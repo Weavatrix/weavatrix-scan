@@ -421,6 +421,18 @@ skip evidence on both sides. The rich row additionally records typed evidence,
 reads content, detects binaries, hashes sources, and computes a deterministic
 revision.
 
+One cross-platform GitHub-hosted-runner sample on the same commit:
+
+| Platform | `ParallelWalker` | jwalk | walkdir | `Scanner` | ignore |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ubuntu | 7.2 ms | 7.8 ms | 9.7 ms | 21.1 ms | 22.8 ms |
+| Windows | 6.5 ms | 9.5 ms | 11.4 ms | 23.5 ms | 27.5 ms |
+| macOS | 5.6 ms | 7.1 ms | 8.0 ms | 15.2 ms | 20.5 ms |
+
+Absolute timings are not comparable between runner operating systems because
+their hardware differs. Within every row, Weavatrix produced identical output
+and led both the parallel-walker and ignore-aware comparisons.
+
 Source review explains the remaining differences:
 
 - `walkdir` streams unsorted directory entries and bounds open descriptors;
