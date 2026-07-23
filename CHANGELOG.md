@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Add a reusable repository matcher with explicit Git-global, Git-exclude,
+  parent-rule, custom-rule, and evidence-producing ignore policies.
+- Add streaming parallel visitors with subtree pruning, cooperative
+  cancellation, and `Continue`/`Skip`/`Quit` controls.
+- Add deterministic whole-scan entry, byte, timeout, and cancellation budgets
+  with typed partial-report termination evidence.
+- Reject repository-local ignore symlinks and keep matcher queries scoped to
+  the configured scan root.
 - Preserve parallel discovery-task order independently of worker completion
   while retaining round-robin load balancing.
 - Replace the serialized idle-worker receiver with a condition-variable job
