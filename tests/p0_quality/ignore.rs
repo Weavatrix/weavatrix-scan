@@ -55,12 +55,10 @@ fn matcher_reuses_parent_git_exclude_and_explicit_rules() {
     fixture.write("packages/app/src/token.secret", "secret\n");
 
     let root = fixture.root.join("packages/app");
-    let policy = IgnorePolicy {
-        parent_rules: true,
-        git_exclude: true,
-        git_global: false,
-        explicit_files: vec![fixture.root.join(".selection-ignore")],
-    };
+    let policy = IgnorePolicy::repository()
+        .with_parent_rules(true)
+        .with_git_exclude(true)
+        .with_explicit_file(fixture.root.join(".selection-ignore"));
     let options = ScanOptions::default()
         .with_ignore_policy(policy)
         .with_extensions(["rs", "cache", "secret"])
@@ -151,12 +149,7 @@ fn git_exclude_and_repository_sources_match_ignore_crate_precedence() {
     for name in ["git.rs", "dot.rs", "custom.rs", "excluded.rs"] {
         fixture.write(name, "fn source() {}\n");
     }
-    let policy = IgnorePolicy {
-        parent_rules: false,
-        git_exclude: true,
-        git_global: false,
-        explicit_files: Vec::new(),
-    };
+    let policy = IgnorePolicy::repository().with_git_exclude(true);
     let mut options = ScanOptions::default()
         .with_ignore_policy(policy)
         .with_extensions(["rs"])

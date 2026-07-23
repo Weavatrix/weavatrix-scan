@@ -70,13 +70,14 @@ impl ParallelWalker {
     ///
     /// Panics if the visitor or an internal traversal worker panics.
     pub fn visit_with_cancellation<F>(
-        self,
+        mut self,
         cancellation: &CancellationToken,
         visitor: F,
     ) -> Result<ParallelVisitReport, WalkError>
     where
         F: for<'entry> Fn(WalkEvent<'entry>) -> WalkControl + Send + Sync + 'static,
     {
+        self.options = self.options.normalized();
         if self.options.follow_links {
             return visit_serial(&self.root, self.options, cancellation, visitor);
         }

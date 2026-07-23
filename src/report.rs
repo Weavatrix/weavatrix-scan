@@ -22,6 +22,8 @@ pub enum SkipKind {
     Oversized,
     PathEscape,
     StandardDirectory,
+    Hidden,
+    Override,
     Symlink,
     SymlinkLoop,
     ScanLimit,
@@ -51,6 +53,7 @@ pub enum IgnoreSourceKind {
     DotIgnore,
     Custom,
     Explicit,
+    Override,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

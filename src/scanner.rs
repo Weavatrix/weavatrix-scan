@@ -1,11 +1,12 @@
 use crate::config::{EvidenceMode, ScanOptions};
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
-use crate::ignore::RepositoryMatcher;
+use crate::ignore::{RepositoryMatch, RepositoryMatcher};
 use crate::path::normalized_relative_path;
 use crate::report::{ScanReport, ScannedFile, SkipKind};
 use crate::scan_finalize::finalize_report;
 use crate::scan_limits::{ScanRuntime, apply_total_bytes_limit};
+use crate::scan_match::skip_match;
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason, Walker};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -126,6 +127,9 @@ fn process_entry(
         matcher.prepare_directory(entry.path())?;
         return Ok(());
     }
+    if entry.depth() < options.effective_min_depth() && !entry.is_dir() {
+        return Ok(());
+    }
     if entry.is_symlink() && !options.walk.follow_links {
         report.skip(relative, SkipKind::Symlink, None);
         return Ok(());
@@ -136,15 +140,17 @@ fn process_entry(
     }
 
     if entry.is_dir() {
-        if options.should_skip_directory(entry.file_name()) {
+        let parent = entry.path().parent().unwrap_or(entry.path());
+        let decision = matcher.matched_prepared(&relative, parent, entry.path(), true);
+        if skip_match(report, relative.clone(), decision) {
             walker.skip_current_dir();
-            report.skip(relative, SkipKind::StandardDirectory, None);
             return Ok(());
         }
-        let parent = entry.path().parent().unwrap_or(entry.path());
-        if matcher.is_ignored_prepared(&relative, parent, true) {
+        if decision != RepositoryMatch::OverrideInclude
+            && options.should_skip_directory(entry.file_name())
+        {
             walker.skip_current_dir();
-            report.skip(relative, SkipKind::Ignored, None);
+            report.skip(relative, SkipKind::StandardDirectory, None);
             return Ok(());
         }
         matcher.prepare_directory(entry.path())?;
@@ -154,21 +160,28 @@ fn process_entry(
         return Ok(());
     }
     let parent = entry.path().parent().unwrap_or(entry.path());
-    if matcher.is_ignored_prepared(&relative, parent, false) {
-        report.skip(relative, SkipKind::Ignored, None);
+    let decision = matcher.matched_prepared(&relative, parent, entry.path(), false);
+    if skip_match(report, relative.clone(), decision) {
         return Ok(());
     }
-    process_file(entry, relative, options, report)
+    process_file(
+        entry,
+        relative,
+        decision == RepositoryMatch::OverrideInclude,
+        options,
+        report,
+    )
 }
 
 fn process_file(
     entry: &WalkEntry,
     relative: String,
+    override_include: bool,
     options: &ScanOptions,
     report: &mut ScanReport,
 ) -> Result<()> {
     let path = entry.path();
-    if !options.accepts_extension(path) {
+    if !override_include && !options.accepts_extension(path) {
         report.skip(relative, SkipKind::Extension, None);
         return Ok(());
     }

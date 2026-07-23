@@ -35,6 +35,11 @@ where
         let mut worker_options = options;
         worker_options.error_policy = ErrorPolicy::Continue;
         worker_options.max_open = 1;
+        worker_options.min_depth = if options.same_file_system {
+            options.min_depth.saturating_sub(task.depth)
+        } else {
+            options.min_depth
+        };
         worker_options.max_depth = if options.same_file_system {
             options
                 .max_depth

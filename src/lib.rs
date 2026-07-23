@@ -9,6 +9,7 @@ mod content;
 mod control;
 mod error;
 mod glob;
+mod hidden;
 mod ignore;
 mod parallel;
 mod path;
@@ -18,6 +19,7 @@ mod pool;
 mod report;
 mod scan_finalize;
 mod scan_limits;
+mod scan_match;
 mod scanner;
 mod walk_iter;
 mod walk_platform;
@@ -28,7 +30,7 @@ mod walker;
 pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips};
 pub use control::CancellationToken;
 pub use error::{Error, Result};
-pub use ignore::{IgnoreFile, RepositoryMatcher};
+pub use ignore::{IgnoreFile, RepositoryMatch, RepositoryMatcher};
 pub use parallel::{
     ParallelVisitReport, ParallelWalkReport, ParallelWalker, WalkControl, WalkEvent,
 };

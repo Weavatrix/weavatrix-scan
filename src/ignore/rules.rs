@@ -32,7 +32,7 @@ impl RuleSet {
         None
     }
 
-    fn matches_exact(&self, path: &str, is_directory: bool) -> Option<RuleAction> {
+    pub(super) fn matches_exact(&self, path: &str, is_directory: bool) -> Option<RuleAction> {
         let mut best = None;
         let name = path.rsplit('/').next().unwrap_or(path);
         if let Some(indices) = self.exact_anywhere.get(name)

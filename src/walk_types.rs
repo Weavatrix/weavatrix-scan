@@ -11,6 +11,7 @@ pub enum ErrorPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkOptions {
+    pub min_depth: usize,
     pub max_depth: Option<usize>,
     pub max_open: usize,
     pub same_file_system: bool,
@@ -22,6 +23,7 @@ pub struct WalkOptions {
 impl Default for WalkOptions {
     fn default() -> Self {
         Self {
+            min_depth: 0,
             max_depth: None,
             max_open: 64,
             same_file_system: false,
@@ -33,6 +35,12 @@ impl Default for WalkOptions {
 }
 
 impl WalkOptions {
+    #[must_use]
+    pub const fn with_min_depth(mut self, min_depth: usize) -> Self {
+        self.min_depth = min_depth;
+        self
+    }
+
     #[must_use]
     pub const fn with_max_depth(mut self, max_depth: Option<usize>) -> Self {
         self.max_depth = max_depth;
@@ -71,6 +79,11 @@ impl WalkOptions {
 
     pub(crate) fn normalized(mut self) -> Self {
         self.max_open = self.max_open.max(1);
+        if let Some(max_depth) = self.max_depth
+            && self.min_depth > max_depth
+        {
+            self.min_depth = max_depth;
+        }
         self
     }
 }

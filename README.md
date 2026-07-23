@@ -37,6 +37,7 @@ layers:
 | `.gitignore` hierarchy | Yes | Yes | No | No |
 | Custom ignore files | Yes | Yes | No | No |
 | Repository / Git-compatible ignore modes | Yes | Yes | No | No |
+| Override globs / source switches | Yes | Yes | No | Directory callback |
 | Reusable cached matcher | Yes | Yes | No | No |
 | Stable normalized paths | Yes | No | No | Sorted traversal |
 | File sizes and content hashes | Yes | No | No | No |
@@ -46,6 +47,7 @@ layers:
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
 | Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
 | Cancellation and whole-scan budgets | Yes | Quit only | No | No |
+| Minimum depth / hidden policy | Yes / Yes | Yes / Yes | Yes / No | Yes / Yes |
 | Default runtime dependencies | 0 Unix / 1 Windows | Multiple | 2 platform helpers | Rayon stack |
 
 Use `Walker` when you only need paths. Use `Scanner` when downstream results
@@ -238,7 +240,9 @@ from "unreadable" or "outside the repository."
 | `extensions` | Empty | Empty accepts every extension |
 | `ignore_files` | `.gitignore`, `.ignore`, `.weavatrixignore` | Hierarchical local ignore files |
 | `ignore_policy` | Repository-only | Optional parents, `.git/info/exclude`, global Git and explicit files |
+| `override_rules` | Empty | Request-level include/exclude globs above ignore sources |
 | `ignore_case_insensitive` | `false` | Optional ASCII case-insensitive ignore matching |
+| `skip_hidden` | `false` | Skip dot-prefixed and Windows-hidden entries unless included |
 | `standard_skips` | Enabled | Skip generated/vendor directories |
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
@@ -249,6 +253,7 @@ from "unreadable" or "outside the repository."
 | `limits.timeout` | None | Stop traversal/content inspection after a duration |
 | `cancellation` | None | Cooperative cross-thread cancellation token |
 | `walk.max_depth` | None | Limit entry depth; root is zero |
+| `walk.min_depth` | `0` | Suppress shallower results while still traversing them |
 | `walk.max_open` | `64` | Bound live directory handles/workers |
 | `walk.same_file_system` | `false` | Stop at filesystem boundaries when enabled |
 | `walk.follow_links` | `false` | Follow only in-root links and detect cycles |
@@ -290,9 +295,14 @@ class. Supported Git-style constructs include:
 The default scanner intentionally does not read global Git configuration,
 parent rules outside the scan root, or `.git/info/exclude`; repository-local
 selection therefore stays portable. `IgnorePolicy::git_compatible()` enables
-all three explicitly, records their content hashes, and marks host-dependent
-reports non-portable. `RepositoryMatcher` exposes the same lazily cached
-selection semantics without requiring a full walk. Differential tests compare
+all three explicitly inside Git repositories, records their content hashes,
+and marks host-dependent reports non-portable. Local `.gitignore`, `.ignore`,
+and custom sources can be toggled independently. Request-level override globs
+use `ignore::Override` semantics: ordinary patterns include and leading `!`
+patterns exclude. Explicit includes can opt paths back into standard-directory
+and extension filtering, but never bypass size or binary safety checks.
+`RepositoryMatcher::matched` exposes the winning typed
+decision without requiring a full walk. Differential tests compare
 exact selected path sets against the
 `ignore` crate for anchored, nested, negated, wildcard, and character-class
 fixtures plus deterministic randomized rule sets. Stress cases cover deep

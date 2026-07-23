@@ -2,8 +2,14 @@ use crate::control::CancellationToken;
 use crate::walker::{ErrorPolicy, WalkOptions};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
+
+mod ignore_policy;
+mod limits;
+
+pub use ignore_policy::IgnorePolicy;
+pub use limits::ScanLimits;
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 1_500_000;
 const DEFAULT_IGNORE_FILES: &[&str] = &[".gitignore", ".ignore", ".weavatrixignore"];
@@ -33,64 +39,20 @@ pub enum EvidenceMode {
     SelectedFiles,
 }
 
-/// Sources of ignore rules outside the scanned repository root.
-///
-/// The default is repository-local and reproducible. Use [`Self::git_compatible`]
-/// when matching the current machine's Git configuration is more important
-/// than producing a portable manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct IgnorePolicy {
-    pub parent_rules: bool,
-    pub git_exclude: bool,
-    pub git_global: bool,
-    pub explicit_files: Vec<PathBuf>,
-}
-
-impl IgnorePolicy {
-    #[must_use]
-    pub const fn repository() -> Self {
-        Self {
-            parent_rules: false,
-            git_exclude: false,
-            git_global: false,
-            explicit_files: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub const fn git_compatible() -> Self {
-        Self {
-            parent_rules: true,
-            git_exclude: true,
-            git_global: true,
-            explicit_files: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_explicit_file(mut self, path: impl Into<PathBuf>) -> Self {
-        self.explicit_files.push(path.into());
-        self
-    }
-}
-
-/// Hard bounds for hostile or unexpectedly large repository trees.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ScanLimits {
-    pub max_entries: Option<u64>,
-    pub max_total_bytes: Option<u64>,
-    pub timeout: Option<Duration>,
-}
-
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ScanOptions {
     pub max_file_bytes: u64,
     pub extensions: BTreeSet<String>,
     pub ignore_files: Vec<String>,
+    /// High-precedence include/exclude globs using `ignore::Override` syntax.
+    pub override_rules: Vec<String>,
     /// Controls parent, repository-exclude and global Git ignore sources.
     pub ignore_policy: IgnorePolicy,
     /// Match ignore patterns without ASCII case sensitivity.
     pub ignore_case_insensitive: bool,
+    /// Skip dot-prefixed and native Windows-hidden entries unless included.
+    pub skip_hidden: bool,
     pub standard_skips: StandardSkips,
     pub hash_file_contents: bool,
     pub detect_binary_files: bool,
@@ -115,8 +77,10 @@ impl Default for ScanOptions {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            override_rules: Vec::new(),
             ignore_policy: IgnorePolicy::default(),
             ignore_case_insensitive: false,
+            skip_hidden: false,
             standard_skips: StandardSkips::Enabled,
             hash_file_contents: true,
             detect_binary_files: true,
@@ -156,6 +120,23 @@ impl ScanOptions {
         self
     }
 
+    /// Replaces request-level override globs.
+    ///
+    /// Like `ignore::Override`, ordinary patterns include matching paths and
+    /// leading `!` patterns exclude them.
+    #[must_use]
+    pub fn with_override_rules<I, S>(mut self, rules: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.override_rules = rules
+            .into_iter()
+            .map(|item| item.as_ref().to_owned())
+            .collect();
+        self
+    }
+
     #[must_use]
     pub const fn with_ignore_case_insensitive(mut self, enabled: bool) -> Self {
         self.ignore_case_insensitive = enabled;
@@ -165,6 +146,12 @@ impl ScanOptions {
     #[must_use]
     pub fn with_ignore_policy(mut self, policy: IgnorePolicy) -> Self {
         self.ignore_policy = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_skip_hidden(mut self, enabled: bool) -> Self {
+        self.skip_hidden = enabled;
         self
     }
 
@@ -220,6 +207,12 @@ impl ScanOptions {
     #[must_use]
     pub const fn with_max_depth(mut self, max_depth: Option<usize>) -> Self {
         self.walk.max_depth = max_depth;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_min_depth(mut self, min_depth: usize) -> Self {
+        self.walk.min_depth = min_depth;
         self
     }
 
@@ -289,6 +282,14 @@ impl ScanOptions {
     }
 
     pub(crate) const fn walk_options(&self) -> WalkOptions {
-        self.walk
+        let mut options = self.walk;
+        options.min_depth = 0;
+        options
+    }
+
+    pub(crate) fn effective_min_depth(&self) -> usize {
+        self.walk.max_depth.map_or(self.walk.min_depth, |maximum| {
+            self.walk.min_depth.min(maximum)
+        })
     }
 }
