@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_paths_remain_lossless_and_get_collision_free_manifest_names() {
     use std::ffi::OsString;
