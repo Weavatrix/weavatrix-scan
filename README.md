@@ -42,6 +42,7 @@ layers:
 | Stable normalized paths | Yes | No | No | Sorted traversal |
 | File sizes and content hashes | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
+| Typed manifest delta / rename evidence | Yes | No | No | No |
 | Binary and oversized-file policy | Yes | No | No | No |
 | Typed skip reasons and warnings | Yes | No | No | No |
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
@@ -213,16 +214,56 @@ With the `serde` feature, invalid native path units use a tagged byte/wide-unit
 representation and round-trip without loss; ordinary Unicode paths remain
 plain JSON strings.
 
+## Incremental consumers
+
+Two completed reports produce a stable changed-file set without filesystem
+access:
+
+```rust
+use weavatrix_scan::{DeltaQuality, Scanner};
+
+let previous = Scanner::new(".").scan()?;
+// Apply repository changes, then scan again.
+let current = Scanner::new(".").scan()?;
+let delta = current.delta_from(&previous);
+
+assert!(matches!(
+    delta.quality,
+    DeltaQuality::ContentHash | DeltaQuality::Metadata | DeltaQuality::Partial
+));
+println!(
+    "added={} modified={} removed={} renamed={}",
+    delta.added.len(),
+    delta.modified.len(),
+    delta.removed.len(),
+    delta.renamed.len()
+);
+# Ok::<(), weavatrix_scan::Error>(())
+```
+
+Rename evidence is emitted only when the same content hash is unique in both
+manifests; duplicate-content moves remain explicit add/remove pairs instead of
+being guessed. Metadata-only scans classify same-size files as unchanged with
+`DeltaQuality::Metadata`, so callers can decide whether to request content
+hashes. Partial scans always produce `DeltaQuality::Partial`.
+
+Long-lived file watchers can keep a `RepositoryMatcher` and call `refresh()`
+after an ignore input changes. Refresh builds a replacement matcher first, so a
+failure leaves the existing matcher usable.
+
 `SkipKind` distinguishes:
 
 - `Binary`
 - `Extension`
 - `FileSystemBoundary`
+- `Hidden`
 - `Ignored`
 - `IoError`
 - `MaxDepth`
+- `Override`
 - `Oversized`
 - `PathEscape`
+- `ScanLimit`
 - `StandardDirectory`
 - `Symlink`
 - `SymlinkLoop`
@@ -422,6 +463,7 @@ The test suite covers:
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
 - streaming parallel pruning and cancellation;
+- manifest delta evidence and live matcher refresh;
 - optional Serde support.
 
 The real-repository benchmark compares the complete normalized selected-path

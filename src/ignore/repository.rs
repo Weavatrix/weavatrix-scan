@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub struct RepositoryMatcher {
     pub(super) scan_root: PathBuf,
+    pub(super) options: ScanOptions,
     pub(super) match_root: PathBuf,
     pub(super) scan_base: String,
     pub(super) ignore_files: Vec<String>,
@@ -74,6 +75,7 @@ impl RepositoryMatcher {
                 .strip_prefix(&match_root)
                 .map_or_else(|_| String::new(), normalized_relative_path),
             scan_root,
+            options: options.clone(),
             match_root,
             ignore_files: options
                 .ignore_files
@@ -219,6 +221,27 @@ impl RepositoryMatcher {
         let absolute = self.absolute_path(directory.as_ref())?;
         self.ensure_scan_scope(&absolute)?;
         self.prepare_directory_inner(&absolute)
+    }
+
+    /// Reloads ignore inputs while preserving the configured matcher policy.
+    ///
+    /// Returns true when effective selection inputs changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`Self::with_options`].
+    pub fn refresh(&mut self) -> Result<bool> {
+        let refreshed = Self::with_options(&self.scan_root, &self.options)?;
+        let changed = self.sources != refreshed.sources
+            || self.portable != refreshed.portable
+            || self.warnings != refreshed.warnings;
+        *self = refreshed;
+        Ok(changed)
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.scan_root
     }
 
     #[must_use]

@@ -16,6 +16,10 @@ All notable changes to this project are documented here.
   high-precedence override globs, and typed hidden-file filtering.
 - Add minimum-depth parity across serial walking, parallel collection,
   streaming visitors, and ignore-aware scanning.
+- Add deterministic manifest deltas for added, removed, modified, unchanged,
+  and uniquely content-matched renamed files with typed evidence quality.
+- Add atomic `RepositoryMatcher` refresh for long-lived watch and LSP
+  consumers when ignore inputs change.
 - Preserve parallel discovery-task order independently of worker completion
   while retaining round-robin load balancing.
 - Replace the serialized idle-worker receiver with a condition-variable job

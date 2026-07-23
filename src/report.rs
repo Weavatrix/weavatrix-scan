@@ -114,6 +114,12 @@ const fn default_portable() -> bool {
 }
 
 impl ScanReport {
+    /// Computes the deterministic changed-file set from an older report.
+    #[must_use]
+    pub fn delta_from(&self, previous: &Self) -> crate::ScanDelta {
+        crate::ScanDelta::between(previous, self)
+    }
+
     pub(crate) fn new(root: PathBuf, record_skipped: bool) -> Self {
         Self {
             root,
