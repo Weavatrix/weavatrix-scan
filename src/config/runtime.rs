@@ -6,12 +6,13 @@ impl ScanOptions {
         if file_count == 0 {
             return 1;
         }
-        let requested = if self.parallelism == 0 {
+        let parallelism = self.content_parallelism.unwrap_or(self.parallelism);
+        let requested = if parallelism == 0 {
             std::thread::available_parallelism()
                 .map_or(1, std::num::NonZeroUsize::get)
                 .min(if cfg!(windows) { 8 } else { 16 })
         } else {
-            self.parallelism
+            parallelism
         };
         requested.min(file_count.div_ceil(128)).max(1)
     }
@@ -20,13 +21,20 @@ impl ScanOptions {
         self.limits.max_entries.is_none()
             && !self.walk.follow_links
             && self.walk.max_open > 1
-            && match self.parallelism {
+            && match self.traversal_parallelism.unwrap_or(self.parallelism) {
                 0 => {
                     std::thread::available_parallelism().is_ok_and(|available| available.get() > 1)
                 }
                 1 => false,
                 _ => true,
             }
+    }
+
+    pub(crate) const fn traversal_workers(&self) -> usize {
+        match self.traversal_parallelism {
+            Some(parallelism) => parallelism,
+            None => self.parallelism,
+        }
     }
 
     pub(crate) const fn walk_options(&self) -> WalkOptions {

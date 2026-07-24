@@ -46,7 +46,7 @@ pub enum EvidenceMode {
 pub struct ScanOptions {
     pub max_file_bytes: u64,
     pub extensions: BTreeSet<String>,
-    /// Reusable named file-extension groups, combined with `extensions`.
+    /// Reusable named file-pattern groups, combined with `extensions`.
     pub file_types: NamedFileTypes,
     pub ignore_files: Vec<String>,
     /// High-precedence include/exclude globs using `ignore::Override` syntax.
@@ -63,8 +63,14 @@ pub struct ScanOptions {
     /// Record typed evidence for entries excluded by policy.
     pub evidence: EvidenceMode,
     /// Traversal and content-inspection workers. Zero selects available
-    /// parallelism.
+    /// parallelism. Retained as the shared backward-compatible default.
     pub parallelism: usize,
+    /// Optional traversal-only worker override. `Some(0)` selects available
+    /// parallelism independently of content inspection.
+    pub traversal_parallelism: Option<usize>,
+    /// Optional content-inspection worker override. `Some(0)` selects
+    /// available parallelism independently of traversal.
+    pub content_parallelism: Option<usize>,
     /// Whole-scan resource bounds. All limits are disabled by default.
     pub limits: ScanLimits,
     /// Optional cooperative cancellation signal.
@@ -92,6 +98,8 @@ impl Default for ScanOptions {
             detect_binary_files: true,
             evidence: EvidenceMode::Complete,
             parallelism: 0,
+            traversal_parallelism: None,
+            content_parallelism: None,
             limits: ScanLimits::default(),
             cancellation: None,
             walk: WalkOptions::default().with_metadata(true),
@@ -186,10 +194,26 @@ impl ScanOptions {
         self
     }
 
-    /// Sets content-inspection workers. Zero restores automatic selection.
+    /// Sets the shared traversal and content worker default.
+    ///
+    /// A later traversal- or content-specific override takes precedence.
     #[must_use]
     pub const fn with_parallelism(mut self, parallelism: usize) -> Self {
         self.parallelism = parallelism;
+        self
+    }
+
+    /// Sets traversal workers without changing content-inspection workers.
+    #[must_use]
+    pub const fn with_traversal_parallelism(mut self, parallelism: usize) -> Self {
+        self.traversal_parallelism = Some(parallelism);
+        self
+    }
+
+    /// Sets content-inspection workers without changing traversal workers.
+    #[must_use]
+    pub const fn with_content_parallelism(mut self, parallelism: usize) -> Self {
+        self.content_parallelism = Some(parallelism);
         self
     }
 
@@ -260,11 +284,11 @@ impl ScanOptions {
                 .any(|candidate| name == OsStr::new(candidate))
     }
 
-    pub(crate) fn accepts_extension(&self, path: &Path) -> bool {
+    pub(crate) fn accepts_extension(&self, path: &Path, relative: &str) -> bool {
         if self.extensions.is_empty() && !self.file_types.is_active() {
             return true;
         }
-        if self.file_types.accepts(path) {
+        if self.file_types.accepts(path, relative) {
             return true;
         }
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {

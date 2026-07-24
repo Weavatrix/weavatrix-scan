@@ -8,6 +8,7 @@
 //! host paths, and [`ScanReport::content_provider`] to reopen selected content
 //! with snapshot verification.
 
+mod cache;
 mod config;
 mod content;
 mod control;
@@ -19,6 +20,7 @@ mod glob;
 mod hash;
 mod hidden;
 mod ignore;
+mod multi_scanner;
 mod parallel;
 mod path;
 #[cfg(feature = "serde")]
@@ -29,6 +31,7 @@ mod report;
 mod scan_finalize;
 mod scan_limits;
 mod scan_match;
+mod scan_stream;
 mod scanner;
 mod snapshot;
 mod walk_builder;
@@ -38,12 +41,14 @@ mod walk_types;
 mod walk_visit;
 mod walker;
 
+pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
 pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips};
 pub use control::CancellationToken;
 pub use delta::{DeltaQuality, ModifiedFile, RenamedFile, ScanDelta};
 pub use error::{Error, Result};
 pub use file_types::NamedFileTypes;
 pub use ignore::{IgnoreFile, RepositoryMatch, RepositoryMatcher};
+pub use multi_scanner::{MultiScanReport, MultiScanner};
 pub use parallel::{
     ParallelVisitReport, ParallelWalkReport, ParallelWalker, WalkControl, WalkEvent,
 };
@@ -55,6 +60,7 @@ pub use report::{
     FileIdentity, FileVersion, IgnoreSourceEvidence, IgnoreSourceKind, ScanCacheStats, ScanReport,
     ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
 };
+pub use scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
 pub use scanner::{Scanner, scan_repository};
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
 pub use walk_builder::{MultiWalker, WalkBuilder};

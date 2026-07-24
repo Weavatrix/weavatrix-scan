@@ -26,6 +26,7 @@ layers:
   contents-first ordering;
 - `Scanner`: ignore-aware deterministic manifest, hashes, revision, and typed
   evidence;
+- `MultiScanner`: ordered, concurrent scans across independent roots;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
 - `ParallelWalker`: bounded adaptive traversal for broad or skewed trees.
 
@@ -43,12 +44,12 @@ layers:
 | Reusable cached matcher | Yes | Yes | No | No |
 | Multi-root / custom native sort | Yes / Yes | Yes / Yes | No / Yes | No / Yes |
 | Directory callback / contents-first | Yes / Yes | Yes / Yes | Yes / Yes | Yes / No |
-| Named file types | Yes | Yes | No | No |
+| Named file types with globs | Yes | Yes | No | No |
 | Stable normalized paths | Yes | No | No | Sorted traversal |
 | Path-safe portable report | Yes | No | No | No |
 | Snapshot-verified content provider | Yes | No | No | No |
 | File sizes and SHA-256 hashes | Yes | No | No | No |
-| Persistent incremental hash reuse | Yes | No | No | No |
+| Versioned compact incremental cache | Yes | No | No | No |
 | Concurrent-mutation evidence | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
 | Typed manifest delta / rename evidence | Yes | No | No | No |
@@ -56,8 +57,9 @@ layers:
 | Typed skip reasons and warnings | Yes | No | No | No |
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
 | Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
+| Deterministic backpressured scan sink | Yes | No | No | No |
 | Parallel pull iterator | No (callback API) | No (callback API) | No | Yes |
-| Parallel multi-root traversal | No | Yes | No | No |
+| Parallel multi-root scanner | Yes | Yes | No | No |
 | Stateful per-directory callback | No | No | No | Yes |
 | Separate root-symlink policy | No | No | Yes | No |
 | Cancellation and whole-scan budgets | Yes | Quit only | No | No |
@@ -69,12 +71,10 @@ must be reproducible and explainable.
 
 The remaining `No` cells are API-shape differences rather than scanner
 correctness gaps. `jwalk` uniquely offers a parallel pull iterator and mutable
-per-directory state, `ignore` can share one parallel traversal across multiple
-roots, and `walkdir` exposes a separate root-symlink switch. Weavatrix currently
-uses a callback for parallel streaming, parallelizes one repository root at a
-time, and canonicalizes the configured root. These are candidates for later API
-work, but do not weaken deterministic manifests, ignore selection, or safety
-evidence.
+per-directory state, while `walkdir` exposes a separate root-symlink switch.
+Weavatrix currently uses a callback for parallel streaming and canonicalizes
+the configured root. These are candidates for later API work, but do not weaken
+deterministic manifests, ignore selection, or safety evidence.
 
 ## Install
 
@@ -230,7 +230,42 @@ The same scanner supports three useful cost levels:
 Traversal and content inspection use bounded available parallelism by default.
 Set
 `.with_parallelism(1)` for a serial run or pass a fixed worker count when a
-host application owns the wider scheduling policy.
+host application owns the wider scheduling policy. Use
+`.with_traversal_parallelism(...)` and `.with_content_parallelism(...)` when
+directory latency and content hashing need separate budgets.
+
+For many independent roots, `MultiScanner` scans roots concurrently while
+returning reports in insertion order:
+
+```rust
+use weavatrix_scan::{MultiScanner, ScanOptions};
+
+let reports = MultiScanner::new("workspace-a")
+    .add_root("workspace-b")
+    .options(ScanOptions::default().with_extensions(["rs", "go", "ts"]))
+    .with_root_parallelism(2)
+    .scan()?;
+
+assert_eq!(reports.len(), 2);
+# Ok::<(), weavatrix_scan::Error>(())
+```
+
+`Scanner::scan_into` keeps deterministic discovery metadata, then inspects and
+hands off one selected file at a time. The synchronous sink provides
+backpressure without an unbounded channel, and selected records are not retained
+by `ScanStreamReport`:
+
+```rust
+use weavatrix_scan::{ScanSinkControl, Scanner};
+
+let summary = Scanner::new(".").scan_into(|file: &weavatrix_scan::ScannedFile| {
+    println!("{}", file.relative);
+    ScanSinkControl::Continue
+})?;
+
+assert_eq!(summary.selected, summary.emitted);
+# Ok::<(), weavatrix_scan::Error>(())
+```
 
 ## Output contract
 
@@ -329,6 +364,11 @@ being guessed. Metadata-only deltas compare size plus available file-version
 evidence; callers that need content certainty should keep hashes enabled.
 Partial scans always produce `DeltaQuality::Partial`.
 
+Persistent consumers should store `ScanReport::to_cache()` instead of the full
+report and pass it to `Scanner::scan_cached`. `ScanCache` has an explicit format
+version and contains only the canonical root plus relative path, size, version,
+hash, and binary-check evidence for reusable files.
+
 Long-lived file watchers can keep a `RepositoryMatcher` and call `refresh()`
 after an ignore input changes. Refresh builds a replacement matcher first, so a
 failure leaves the existing matcher usable.
@@ -362,7 +402,7 @@ from "unreadable" or "outside the repository."
 | --- | --- | --- |
 | `max_file_bytes` | 1,500,000 | Reject oversized source candidates |
 | `extensions` | Empty | Empty accepts every extension |
-| `file_types` | Empty | Named reusable extension groups, combined with `extensions` |
+| `file_types` | Empty | Named file-name/repository-relative glob groups |
 | `ignore_files` | `.gitignore`, `.ignore`, `.weavatrixignore` | Hierarchical local ignore files |
 | `ignore_policy` | Repository-only | Optional parents, `.git/info/exclude`, global Git and explicit files |
 | `override_rules` | Empty | Request-level include/exclude globs above ignore sources |
@@ -373,6 +413,8 @@ from "unreadable" or "outside the repository."
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
 | `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
 | `parallelism` | `0` | Traversal/content workers; zero uses bounded available parallelism |
+| `traversal_parallelism` | None | Optional traversal-only worker override |
+| `content_parallelism` | None | Optional content-inspection worker override |
 | `limits.max_entries` | None | Bound examined filesystem entries |
 | `limits.max_total_bytes` | None | Deterministically bound selected content bytes |
 | `limits.timeout` | None | Stop traversal/content inspection after a duration |

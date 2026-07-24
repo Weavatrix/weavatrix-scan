@@ -1,8 +1,9 @@
+use crate::cache::{ScanCache, ScanCacheEntry};
 use crate::config::{EvidenceMode, ScanOptions};
 use crate::error::{Error, Result};
 use crate::file_version::reusable;
 use crate::report::{
-    ScanCacheStats, ScanReport, ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
+    ScanCacheStats, ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
 };
 use crate::walker::ErrorPolicy;
 use inspect::Inspection;
@@ -25,7 +26,7 @@ pub(crate) fn inspect_files(
     files: Vec<ScannedFile>,
     options: &ScanOptions,
     started: Instant,
-    previous: Option<&ScanReport>,
+    previous: Option<&ScanCache>,
 ) -> Result<InspectedFiles> {
     if !options.hash_file_contents && !options.detect_binary_files {
         return Ok(InspectedFiles {
@@ -36,11 +37,11 @@ pub(crate) fn inspect_files(
             cache: ScanCacheStats::default(),
         });
     }
-    let cache = previous.map_or_else(HashMap::new, |report| {
-        report
-            .files
+    let cache = previous.map_or_else(HashMap::new, |cache| {
+        cache
+            .entries
             .iter()
-            .map(|file| (file.relative.as_str(), file))
+            .map(|entry| (entry.relative.as_str(), entry))
             .collect()
     });
     let stop = InspectionStop::default();
@@ -95,7 +96,7 @@ fn inspect_chunk(
     options: &ScanOptions,
     started: Instant,
     stop: &InspectionStop,
-    cache: &HashMap<&str, &ScannedFile>,
+    cache: &HashMap<&str, &ScanCacheEntry>,
 ) -> Result<InspectedFiles> {
     let mut inspected = InspectedFiles {
         files: Vec::with_capacity(files.len()),
@@ -143,25 +144,21 @@ fn inspect_chunk(
 fn reuse_cached(
     current: &mut ScannedFile,
     options: &ScanOptions,
-    previous: Option<&ScannedFile>,
+    previous: Option<&ScanCacheEntry>,
 ) -> bool {
     let Some(previous) = previous else {
         return false;
     };
-    let Some(hash) = previous
-        .content_hash
-        .as_ref()
-        .filter(|hash| hash.starts_with("sha256:"))
-    else {
+    if !previous.content_hash.starts_with("sha256:") {
         return false;
-    };
+    }
     if current.bytes != previous.bytes
         || !reusable(&previous.version, &current.version)
         || (options.detect_binary_files && !previous.binary_checked)
     {
         return false;
     }
-    current.content_hash = Some(hash.clone());
+    current.content_hash = Some(previous.content_hash.clone());
     current.binary_checked = previous.binary_checked;
     true
 }

@@ -78,7 +78,7 @@ fn process_file(
     report: &mut ScanReport,
 ) -> Result<()> {
     let path = entry.path();
-    if !override_include && !options.accepts_extension(path) {
+    if !override_include && !options.accepts_extension(path, &relative) {
         report.skip(relative, SkipKind::Extension, None);
         return Ok(());
     }

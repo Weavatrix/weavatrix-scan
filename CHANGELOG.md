@@ -22,6 +22,14 @@ All notable changes to this project are documented here.
   diagnostic redaction plus a root-independent portable revision.
 - Add `SnapshotContentProvider` with path-scope validation, bounded reads,
   before/after file-version checks, and optional SHA-256 verification.
+- Add ordered parallel `MultiScanner` reports and deterministic,
+  backpressured `Scanner::scan_into` content emission.
+- Add repository-relative glob definitions for named file types and separate
+  traversal/content worker budgets.
+- Add versioned compact `ScanCache` persistence instead of requiring a full
+  previous `ScanReport`.
+- Expand randomized differential coverage against both `ignore` and the real
+  `git check-ignore` implementation.
 - Add multi-root `WalkBuilder`, native custom sorting, directory/entry
   callbacks, contents-first ordering, and named scanner file types.
 
