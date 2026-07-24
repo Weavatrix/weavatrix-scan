@@ -46,7 +46,7 @@ fn sorting_filtering_and_contents_first_match_builder_contracts() {
     fixture.write("skip/hidden.rs", "fn hidden() {}\n");
 
     let sorted = WalkBuilder::new(&fixture.root)
-        .sort_by(|left, right| right.cmp(left))
+        .sort_by_name(|left, right| right.cmp(left))
         .filter_directories(|entry| entry.file_name() != "skip")
         .build()
         .collect::<Result<Vec<_>, _>>()
@@ -124,11 +124,11 @@ fn custom_sort_can_group_directories_before_files() {
     fixture.write("a/file.rs", "fn a() {}\n");
     let entries = WalkBuilder::new(&fixture.root)
         .sort_by(|left, right| {
-            let left_has_extension = Path::new(left).extension().is_some();
-            let right_has_extension = Path::new(right).extension().is_some();
-            left_has_extension
-                .cmp(&right_has_extension)
-                .then_with(|| left.cmp(right))
+            let left_is_file = left.file_type().is_ok_and(|kind| kind.is_file());
+            let right_is_file = right.file_type().is_ok_and(|kind| kind.is_file());
+            left_is_file
+                .cmp(&right_is_file)
+                .then_with(|| left.file_name().cmp(&right.file_name()))
         })
         .build()
         .collect::<Result<Vec<_>, _>>()

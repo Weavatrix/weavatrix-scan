@@ -22,6 +22,7 @@ mod hidden;
 mod ignore;
 mod multi_scanner;
 mod parallel;
+mod parallel_multi;
 mod path;
 #[cfg(feature = "serde")]
 mod path_serde;
@@ -35,6 +36,7 @@ mod scan_stream;
 mod scanner;
 mod snapshot;
 mod stateful_walk;
+mod stdout;
 mod walk_builder;
 mod walk_iter;
 mod walk_platform;
@@ -42,6 +44,8 @@ mod walk_types;
 mod walk_visit;
 mod walker;
 mod watch;
+#[cfg(feature = "notify")]
+mod watch_notify;
 
 pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
 pub use config::{
@@ -57,6 +61,7 @@ pub use parallel::{
     ParallelVisitReport, ParallelWalkIter, ParallelWalkReport, ParallelWalker, WalkControl,
     WalkEvent,
 };
+pub use parallel_multi::{ParallelMultiWalkReport, ParallelMultiWalker};
 pub use portable_report::{
     PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
     PortableSkippedEntry,

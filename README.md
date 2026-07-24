@@ -18,8 +18,7 @@ native volume and file identities.
 ## Why another repository walker?
 
 `walkdir` and `jwalk` are excellent traversal libraries. `ignore` adds mature
-Git-style filtering. Weavatrix Scan exposes five deliberately separate
-layers:
+Git-style filtering. Weavatrix Scan exposes deliberately separate layers:
 
 - `Walker`: iterative, streaming, lossless low-level traversal;
 - `WalkBuilder`: multi-root traversal, native sorting, directory filters, and
@@ -27,12 +26,14 @@ layers:
 - `Scanner`: ignore-aware deterministic manifest, hashes, revision, and typed
   evidence;
 - `MultiScanner`: ordered, concurrent scans across independent roots;
+- `ParallelMultiWalker`: ordered reports from concurrent raw roots;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
 - `ParallelWalker`: bounded adaptive traversal for broad or skewed trees.
 
 | Capability | weavatrix-scan | ignore | walkdir | jwalk |
 | --- | :---: | :---: | :---: | :---: |
 | Iterative traversal | Yes | Yes | Yes | Yes |
+| Single-file root | Yes | Yes | Yes | Yes |
 | Lossless native paths | Yes | Yes | Yes | Yes |
 | Continue after local errors | Configurable | Yes | Yes | Yes |
 | `max_depth` / bounded handles | Yes | Yes | Yes | Depth limit |
@@ -42,15 +43,16 @@ layers:
 | Repository / Git-compatible ignore modes | Yes | Yes | No | No |
 | Override globs / source switches | Yes | Yes | No | Directory callback |
 | Reusable cached matcher | Yes | Yes | No | No |
-| Multi-root / custom native sort | Yes / Yes | Yes / Yes | No / Yes | No / Yes |
+| Multi-root / full-entry custom sort | Serial + parallel / Yes | Yes / Yes | No / Yes | No / Yes |
 | Directory callback / contents-first | Yes / Yes | Yes / Yes | Yes / Yes | Yes / No |
-| Named file types with globs | Yes | Yes | No | No |
+| Built-in types / composition / negation | Yes / Yes / Yes | Yes / Yes / Yes | No | No |
 | Stable normalized paths | Yes | No | No | Sorted traversal |
 | Path-safe portable report | Yes | No | No | No |
 | Snapshot-verified content provider | Yes | No | No | No |
 | File sizes and SHA-256 hashes | Yes | No | No | No |
 | Versioned compact incremental cache | Yes | No | No | No |
 | Watcher events to changed-path manifest update | Yes | No | No | No |
+| Optional direct `notify` adapter | Yes | No | No | No |
 | Concurrent-mutation evidence | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
 | Typed manifest delta / rename evidence | Yes | No | No | No |
@@ -62,6 +64,7 @@ layers:
 | Parallel pull iterator | Bounded unordered / ordered DFS | No (callback API) | No | Ordered DFS |
 | Parallel multi-root scanner | Yes | Yes | No | No |
 | Stateful per-directory callback | Yes | No | No | Yes |
+| Redirected-stdout protection | Yes | Yes | No | No |
 | Separate root-symlink policy | Yes | No | Yes | No |
 | Cancellation and whole-scan budgets | Yes | Quit only | No | No |
 | Minimum depth / hidden policy | Yes / Yes | Yes / Yes | Yes / No | Yes / Yes |
@@ -86,6 +89,13 @@ Enable serialization only when needed:
 ```toml
 [dependencies]
 weavatrix-scan = { version = "0.2", features = ["serde"] }
+```
+
+Enable direct conversion from `notify::Event` without making a watcher runtime
+mandatory for other users:
+
+```toml
+weavatrix-scan = { version = "0.2", features = ["notify"] }
 ```
 
 ## Quick start
@@ -180,8 +190,13 @@ let entries = WalkBuilder::new("repo-a")
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
 
-Custom sort callbacks receive native `OsStr` names, so sorting never requires
-lossy UTF-8 conversion. Directory filters run before descent.
+`sort_by` receives complete `std::fs::DirEntry` values, including path,
+file type, and metadata access. `sort_by_name` remains the allocation-free
+native `OsStr` comparator, so sorting never requires lossy UTF-8 conversion.
+Low-level walkers accept either a directory or one file as the root.
+`skip_stdout(true)` prevents a redirected output file inside the tree from
+feeding back into a command that is scanning it. Directory filters run before
+descent.
 `filter_directories_stateful` accepts `FnMut`, serializes callback access, and
 keeps one captured state across every root in the builder. For batch mutation
 and typed state propagation, `StatefulWalkBuilder<R, E>::process_read_dir`
@@ -448,6 +463,9 @@ and inspects only changed paths, removes deleted paths from the previous
 manifest, keeps unchanged evidence, and recomputes the deterministic revision
 without traversing the tree. Structural, unsafe, partial, or selection-changing
 plans automatically use a complete scan.
+With the optional `notify` feature, `plan_notify` maps `notify::Event` batches
+directly. Access-only events are ignored; imprecise, rescan, and possibly
+structural events conservatively request a complete scan.
 
 `SkipKind` distinguishes:
 
@@ -519,6 +537,19 @@ use weavatrix_scan::{ScanOptions, StandardSkips};
 
 let mut options = ScanOptions::default();
 options.standard_skips = StandardSkips::Disabled;
+```
+
+`NamedFileTypes::defaults()` provides common language, markup, data, and build
+definitions. Types can be composed, selected, and negated; later matching
+selections win:
+
+```rust
+use weavatrix_scan::NamedFileTypes;
+
+let types = NamedFileTypes::defaults()
+    .with_composed_type("product", ["rust", "go", "typescript", "javascript"])
+    .select(["product"])
+    .negate(["javascript"]);
 ```
 
 ## Ignore semantics
@@ -629,32 +660,32 @@ Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 8.3 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 5.8 ms |
-| Raw paths | ignore | 6,004 | 9.6 ms |
-| Raw paths | walkdir | 6,004 | 9.2 ms |
-| Raw paths | jwalk | 6,004 | 7.5 ms |
-| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 31.5 ms |
-| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 18.8 ms |
-| Ignore-aware manifest | ignore | 6,001 | 37.4 ms |
-| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 123.5 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 29.0 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 14.5 ms |
+| Raw paths | ignore | 6,004 | 34.7 ms |
+| Raw paths | walkdir | 6,004 | 31.9 ms |
+| Raw paths | jwalk | 6,004 | 20.2 ms |
+| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 55.8 ms |
+| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 32.9 ms |
+| Ignore-aware manifest | ignore | 6,001 | 62.6 ms |
+| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 237.1 ms |
 
 Each row is the median of five independent process medians. Every process runs
 11 interleaved output-equivalent samples after two warmups. On this measurement
-`ParallelWalker` was 23.2% faster than `jwalk`; the parallel
-selected-manifest `Scanner` was 49.7% faster than `ignore`. The rich row
+`ParallelWalker` was 28.1% faster than `jwalk`; the parallel
+selected-manifest `Scanner` was 47.5% faster than `ignore`. The rich row
 additionally reads content, detects binaries, computes SHA-256 hashes, captures
 snapshot evidence, and records typed exclusions. Absolute timings vary by
 filesystem, cache, antivirus, CPU, and operating system; the benchmark workflow
 reruns the same checks on Ubuntu, Windows, and macOS.
 
-The P2 API benchmark uses the same corpus and methodology. A separate Windows
-sample measured the bounded pull iterator at 8.2 ms with capacity 1,024 versus
-8.0 ms for `jwalk`; capacity 64 measured 10.2 ms. The stateful directory
-callback was indistinguishable from the stateless callback within run-to-run
-noise, and changing the normal-root symlink policy added no measurable
-traversal cost. Coalescing 1,024 watcher events into a deterministic plan took
-1.3 ms; planning plus invalidating a 6,000-entry cache took 2.7 ms. These are
+The API benchmark uses the same corpus and methodology. The ordered bounded DFS
+iterator measured 16.4 ms versus 24.2 ms for `jwalk`; the unordered iterator at
+capacity 1,024 measured 27.3 ms. The typed stateful batch walker measured
+26.5 ms versus 22.3 ms for the plain serial builder. Coalescing 1,024 watcher
+events into a deterministic plan took 2.3 ms; planning plus invalidating a
+6,000-entry cache took 6.0 ms. Re-matching and hashing 1,024 changed paths took
+126.3 ms versus 196.9 ms for a complete 6,000-file scan. These are
 median-of-five process medians, not single best runs.
 
 Source review explains the remaining differences:
@@ -676,9 +707,9 @@ The optional real-repository benchmark keeps repository identities and paths
 local; published documentation records only synthetic corpus results. It first
 asserts the exact same sorted `(normalized path, bytes)` manifest. The stress
 profile also measured a
-skewed raw tree at 3.2 ms (`ParallelWalker`), 3.4 ms (`jwalk`), and 4.7 ms
-(`walkdir`), while an unchanged 12 MiB SHA-256 manifest fell from 48.6 ms full
-scan to 0.7 ms with incremental hash reuse. Treat these as reproducible
+skewed raw tree at 6.7 ms (`ParallelWalker`), 8.2 ms (`jwalk`), and 14.1 ms
+(`walkdir`), while an unchanged 12 MiB SHA-256 manifest fell from 164.4 ms full
+scan to 1.9 ms with incremental hash reuse. Treat these as reproducible
 samples, not universal constants.
 
 ## Correctness checks
@@ -696,6 +727,8 @@ The test suite covers:
 - strict cache validation under simulated size/timestamp collisions;
 - multi-root walking, named file types, custom native sorting, directory
   filtering, and contents-first ordering;
+- single-file roots, full-entry sorting, built-in type composition/negation,
+  redirected-stdout protection, parallel raw roots, and `notify` conversion;
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
 - streaming parallel pruning and cancellation;

@@ -1,5 +1,5 @@
 use crate::control::CancellationToken;
-use crate::file_types::NamedFileTypes;
+use crate::file_types::{FileTypeMatch, NamedFileTypes};
 use crate::walker::WalkOptions;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -271,7 +271,15 @@ impl ScanOptions {
         if self.extensions.is_empty() && !self.file_types.is_active() {
             return true;
         }
-        if self.file_types.accepts(path, relative) {
+        match self.file_types.matched(path, relative) {
+            FileTypeMatch::Include => return true,
+            FileTypeMatch::Exclude => return false,
+            FileTypeMatch::None => {}
+        }
+        if self.extensions.is_empty() && self.file_types.has_includes() {
+            return false;
+        }
+        if self.extensions.is_empty() {
             return true;
         }
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {

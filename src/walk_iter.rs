@@ -19,8 +19,8 @@ impl Iterator for Walker {
                     root,
                     0,
                     Some(self.root_file_type.expect("root metadata is present")),
-                    None,
-                    None,
+                    self.root_bytes,
+                    self.root_version,
                 );
                 match entry {
                     Ok(entry) => {
@@ -104,6 +104,13 @@ impl Iterator for Walker {
 
 impl Walker {
     fn prepare_entry(&mut self, entry: WalkEntry) -> bool {
+        if entry.is_file()
+            && self.skip_stdout.is_some_and(|identity| {
+                crate::stdout::path_matches(entry.path(), identity).unwrap_or(false)
+            })
+        {
+            return false;
+        }
         let accepted = self.filter.as_ref().is_none_or(|filter| filter(&entry));
         if !accepted {
             if entry.is_dir() {

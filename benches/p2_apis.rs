@@ -6,8 +6,9 @@ use support::{
     BenchmarkCase, EXTENSIONS, Fixture, RAW_FILES, SOURCE_FILES, measure_group, print_measurement,
 };
 use weavatrix_scan::{
-    ParallelWalker, RootSymlinkPolicy, ScanOptions, Scanner, WalkBuilder, WalkEntry, WalkOptions,
-    Walker, WatchEvent, WatchEventKind, WatcherEventAdapter,
+    ParallelWalker, RootSymlinkPolicy, ScanOptions, Scanner, StatefulWalkBuilder,
+    StatefulWalkEntry, WalkBuilder, WalkEntry, WalkOptions, Walker, WatchEvent, WatchEventKind,
+    WatcherEventAdapter,
 };
 
 fn main() {
@@ -34,6 +35,9 @@ fn benchmark_parallel_pull(fixture: &Fixture) {
         BenchmarkCase::new("weavatrix-pull-1024", || {
             checked_path_len(&parallel_pull_paths(&fixture.root, 1024), &expected)
         }),
+        BenchmarkCase::new("weavatrix-ordered-1024", || {
+            checked_path_len(&parallel_ordered_paths(&fixture.root, 1024), &expected)
+        }),
         BenchmarkCase::new("jwalk", || {
             checked_path_len(&jwalk_paths(&fixture.root), &expected)
         }),
@@ -55,6 +59,9 @@ fn benchmark_directory_callbacks(fixture: &Fixture) {
         }),
         BenchmarkCase::new("weavatrix-stateful", || {
             builder_file_count(&fixture.root, CallbackMode::Stateful)
+        }),
+        BenchmarkCase::new("weavatrix-stateful-batch", || {
+            stateful_batch_file_count(&fixture.root)
         }),
     ];
     let results = measure_group(&mut cases);
@@ -94,6 +101,11 @@ fn benchmark_watcher_adapter(fixture: &Fixture) {
     let events = watcher_events(&fixture.root, EVENT_COUNT);
     let full_rescan = vec![WatchEvent::new("", WatchEventKind::Rescan)];
     let incremental_plan = adapter.plan(events.clone());
+    let changed_plan = adapter.plan(
+        events
+            .iter()
+            .map(|event| WatchEvent::new(event.path.clone(), WatchEventKind::Modify)),
+    );
     assert!(!incremental_plan.full_rescan);
     assert_eq!(
         incremental_plan.changed.len() + incremental_plan.removed.len(),
@@ -120,11 +132,39 @@ fn benchmark_watcher_adapter(fixture: &Fixture) {
             let mut next_cache = cache.clone();
             next_cache.apply_watch_plan(&plan)
         }),
+        BenchmarkCase::new("weavatrix-changed-scan", || {
+            Scanner::new(&fixture.root)
+                .options(options.clone())
+                .scan_watch_plan(&report, &changed_plan)
+                .unwrap()
+                .files
+                .len()
+        }),
+        BenchmarkCase::new("weavatrix-full-scan", || {
+            Scanner::new(&fixture.root)
+                .options(options.clone())
+                .scan()
+                .unwrap()
+                .files
+                .len()
+        }),
     ];
     let results = measure_group(&mut cases);
     for (case, result) in cases.iter().zip(results) {
         print_count("watcher-adapter", case.name, "items", &result);
     }
+}
+
+fn parallel_ordered_paths(root: &Path, capacity: usize) -> Vec<PathBuf> {
+    let mut paths = ParallelWalker::new(root)
+        .into_iter_ordered_bounded(capacity)
+        .filter_map(Result::ok)
+        .filter(WalkEntry::is_file)
+        .filter(|entry| has_extension(entry.path()))
+        .map(|entry| entry.relative_path().to_path_buf())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths
 }
 
 fn parallel_pull_paths(root: &Path, capacity: usize) -> Vec<PathBuf> {
@@ -175,6 +215,17 @@ fn builder_file_count(root: &Path, mode: CallbackMode) -> usize {
     walker
         .filter_map(Result::ok)
         .filter(WalkEntry::is_file)
+        .filter(|entry| has_extension(entry.path()))
+        .count()
+}
+
+fn stateful_batch_file_count(root: &Path) -> usize {
+    StatefulWalkBuilder::<usize, ()>::new(root, 0)
+        .process_read_dir(|_, _, directories, _| *directories += 1)
+        .build()
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(StatefulWalkEntry::is_file)
         .filter(|entry| has_extension(entry.path()))
         .count()
 }

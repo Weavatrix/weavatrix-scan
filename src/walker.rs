@@ -60,6 +60,8 @@ pub struct Walker {
     pub(crate) root: Arc<PathBuf>,
     pub(crate) root_components: usize,
     pub(crate) root_file_type: Option<FileType>,
+    pub(crate) root_bytes: Option<u64>,
+    pub(crate) root_version: Option<crate::FileVersion>,
     pub(crate) root_file_system: Option<FileSystemId>,
     pub(crate) root_directory_info: Option<PlatformDirectoryInfo>,
     pub(crate) options: WalkOptions,
@@ -72,6 +74,7 @@ pub struct Walker {
     pub(crate) finished: bool,
     pub(crate) sorter: Option<EntrySorter>,
     pub(crate) filter: Option<EntryFilter>,
+    pub(crate) skip_stdout: Option<crate::FileIdentity>,
     pub(crate) contents_first: bool,
     pub(crate) deferred_entry: Option<WalkEntry>,
 }
@@ -92,7 +95,7 @@ impl Walker {
     ///
     /// Returns an error when the root cannot be resolved or inspected.
     pub fn with_options(root: impl AsRef<Path>, options: WalkOptions) -> Result<Self, WalkError> {
-        Self::with_behavior(root, options, None, None, false)
+        Self::with_behavior(root, options, None, None, None, false)
     }
 
     pub(crate) fn with_behavior(
@@ -100,6 +103,7 @@ impl Walker {
         options: WalkOptions,
         sorter: Option<EntrySorter>,
         filter: Option<EntryFilter>,
+        skip_stdout: Option<crate::FileIdentity>,
         contents_first: bool,
     ) -> Result<Self, WalkError> {
         let requested = root.as_ref();
@@ -135,31 +139,34 @@ impl Walker {
         };
         let metadata = fs::metadata(&canonical)
             .map_err(|source| WalkError::new(&canonical, 0, WalkOperation::ReadMetadata, source))?;
-        if !metadata.is_dir() {
-            return Err(WalkError::new(
-                &canonical,
-                0,
-                WalkOperation::ReadMetadata,
-                io::Error::new(io::ErrorKind::InvalidInput, "root is not a directory"),
-            ));
-        }
-        let root_directory_info = if options.follow_links || options.same_file_system {
-            Some(directory_info(&canonical, &metadata).map_err(|source| {
-                WalkError::new(&canonical, 0, WalkOperation::ReadMetadata, source)
-            })?)
-        } else {
-            None
-        };
+        let root_directory_info =
+            if metadata.is_dir() && (options.follow_links || options.same_file_system) {
+                Some(directory_info(&canonical, &metadata).map_err(|source| {
+                    WalkError::new(&canonical, 0, WalkOperation::ReadMetadata, source)
+                })?)
+            } else {
+                None
+            };
         let root_file_system = if options.same_file_system {
             root_directory_info.map(|info| info.file_system)
         } else {
             None
+        };
+        let (root_bytes, root_version) = if options.collect_metadata && metadata.is_file() {
+            (
+                Some(metadata.len()),
+                Some(crate::file_version::from_metadata(&metadata)),
+            )
+        } else {
+            (None, None)
         };
         let root = Arc::new(canonical.clone());
         Ok(Self {
             root: Arc::clone(&root),
             root_components: canonical.components().count(),
             root_file_type: Some(metadata.file_type()),
+            root_bytes,
+            root_version,
             root_file_system,
             root_directory_info,
             options,
@@ -172,6 +179,7 @@ impl Walker {
             finished: false,
             sorter,
             filter,
+            skip_stdout,
             contents_first,
             deferred_entry: None,
         })
@@ -210,6 +218,8 @@ impl Walker {
             root: Arc::clone(root),
             root_components,
             root_file_type: None,
+            root_bytes: None,
+            root_version: None,
             root_file_system,
             root_directory_info: None,
             options,
@@ -227,6 +237,7 @@ impl Walker {
             finished: false,
             sorter: None,
             filter: None,
+            skip_stdout: None,
             contents_first: false,
             deferred_entry: None,
         }
@@ -268,7 +279,7 @@ impl Walker {
                     Some(sorter) => {
                         let mut entries = entries.collect::<Vec<_>>();
                         entries.sort_by(|left, right| match (left, right) {
-                            (Ok(left), Ok(right)) => sorter(&left.file_name(), &right.file_name()),
+                            (Ok(left), Ok(right)) => sorter(left, right),
                             (Err(_), Ok(_)) => std::cmp::Ordering::Less,
                             (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
                             (Err(_), Err(_)) => std::cmp::Ordering::Equal,

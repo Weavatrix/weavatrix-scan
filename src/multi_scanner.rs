@@ -70,7 +70,11 @@ impl MultiScanner {
     ///
     /// Panics if an internal root worker panics.
     pub fn scan(self) -> Result<MultiScanReport> {
-        let worker_count = root_worker_count(self.root_parallelism, self.roots.len());
+        let worker_count = if crate::pool::ThreadPool::is_worker_thread() {
+            1
+        } else {
+            root_worker_count(self.root_parallelism, self.roots.len())
+        };
         if worker_count <= 1 {
             let reports = self
                 .roots

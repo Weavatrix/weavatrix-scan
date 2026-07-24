@@ -1,10 +1,12 @@
+use crate::FileIdentity;
 use crate::walker::{WalkEntry, WalkError, WalkOptions, Walker};
 use std::cmp::Ordering;
 use std::ffi::OsStr;
+use std::fs::DirEntry;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-pub(crate) type EntrySorter = Arc<dyn Fn(&OsStr, &OsStr) -> Ordering + Send + Sync + 'static>;
+pub(crate) type EntrySorter = Arc<dyn Fn(&DirEntry, &DirEntry) -> Ordering + Send + Sync + 'static>;
 pub(crate) type EntryFilter = Arc<dyn Fn(&WalkEntry) -> bool + Send + Sync + 'static>;
 
 /// Configures flexible single- or multi-root walking.
@@ -13,6 +15,7 @@ pub struct WalkBuilder {
     options: WalkOptions,
     sorter: Option<EntrySorter>,
     filter: Option<EntryFilter>,
+    skip_stdout: Option<FileIdentity>,
     contents_first: bool,
 }
 
@@ -24,6 +27,7 @@ impl WalkBuilder {
             options: WalkOptions::default(),
             sorter: None,
             filter: None,
+            skip_stdout: None,
             contents_first: false,
         }
     }
@@ -43,17 +47,41 @@ impl WalkBuilder {
     /// Sorts each directory by its native file name before descent.
     #[must_use]
     pub fn sort_by_file_name(mut self) -> Self {
-        self.sorter = Some(Arc::new(OsStr::cmp));
+        self.sorter = Some(Arc::new(|left, right| {
+            left.file_name().cmp(&right.file_name())
+        }));
         self
     }
 
-    /// Sorts each directory with a caller-provided native-name comparator.
+    /// Sorts each directory with a comparator over complete directory entries.
     #[must_use]
     pub fn sort_by<F>(mut self, compare: F) -> Self
     where
-        F: Fn(&OsStr, &OsStr) -> Ordering + Send + Sync + 'static,
+        F: Fn(&DirEntry, &DirEntry) -> Ordering + Send + Sync + 'static,
     {
         self.sorter = Some(Arc::new(compare));
+        self
+    }
+
+    /// Sorts with a native-name comparator without lossy UTF-8 conversion.
+    #[must_use]
+    pub fn sort_by_name<F>(mut self, compare: F) -> Self
+    where
+        F: Fn(&OsStr, &OsStr) -> Ordering + Send + Sync + 'static,
+    {
+        self.sorter = Some(Arc::new(move |left, right| {
+            compare(&left.file_name(), &right.file_name())
+        }));
+        self
+    }
+
+    /// Skips a regular file that refers to redirected standard output.
+    ///
+    /// This prevents feedback loops such as scanning a tree while writing
+    /// command output into a file inside that same tree.
+    #[must_use]
+    pub fn skip_stdout(mut self, enabled: bool) -> Self {
+        self.skip_stdout = enabled.then(crate::stdout::identity).flatten();
         self
     }
 
@@ -111,6 +139,7 @@ impl WalkBuilder {
             options: self.options,
             sorter: self.sorter,
             filter: self.filter,
+            skip_stdout: self.skip_stdout,
             contents_first: self.contents_first,
             current: None,
         }
@@ -123,6 +152,7 @@ pub struct MultiWalker {
     options: WalkOptions,
     sorter: Option<EntrySorter>,
     filter: Option<EntryFilter>,
+    skip_stdout: Option<FileIdentity>,
     contents_first: bool,
     current: Option<Walker>,
 }
@@ -144,6 +174,7 @@ impl Iterator for MultiWalker {
                 self.options,
                 self.sorter.clone(),
                 self.filter.clone(),
+                self.skip_stdout,
                 self.contents_first,
             ) {
                 Ok(walker) => self.current = Some(walker),
