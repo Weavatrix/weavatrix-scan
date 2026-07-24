@@ -2,6 +2,11 @@ use crate::report::{FileIdentity, FileVersion};
 use std::fs::{File, Metadata};
 use std::time::UNIX_EPOCH;
 
+pub(crate) struct FileSnapshot {
+    pub bytes: u64,
+    pub version: FileVersion,
+}
+
 pub(crate) fn from_metadata(metadata: &Metadata) -> FileVersion {
     FileVersion {
         modified_ns: metadata
@@ -18,6 +23,38 @@ pub(crate) fn from_file(file: &File, metadata: &Metadata) -> std::io::Result<Fil
     let mut version = from_metadata(metadata);
     version.identity = file_identity(file, metadata)?;
     Ok(version)
+}
+
+#[cfg(windows)]
+pub(crate) fn snapshot(file: &File) -> std::io::Result<FileSnapshot> {
+    const WINDOWS_TO_UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
+    const NANOS_PER_TICK: u128 = 100;
+
+    let information = winapi_util::file::information(file)?;
+    let modified_ns = information
+        .last_write_time()
+        .and_then(|ticks| ticks.checked_sub(WINDOWS_TO_UNIX_EPOCH_TICKS))
+        .map(|ticks| u128::from(ticks).saturating_mul(NANOS_PER_TICK));
+    Ok(FileSnapshot {
+        bytes: information.file_size(),
+        version: FileVersion {
+            modified_ns,
+            changed_ns: None,
+            identity: Some(FileIdentity {
+                file_system: information.volume_serial_number(),
+                file: information.file_index(),
+            }),
+        },
+    })
+}
+
+#[cfg(not(windows))]
+pub(crate) fn snapshot(file: &File) -> std::io::Result<FileSnapshot> {
+    let metadata = file.metadata()?;
+    Ok(FileSnapshot {
+        bytes: metadata.len(),
+        version: from_file(file, &metadata)?,
+    })
 }
 
 pub(crate) fn reusable(previous: &FileVersion, current: &FileVersion) -> bool {
@@ -82,7 +119,7 @@ fn file_identity(_file: &File, _metadata: &Metadata) -> std::io::Result<Option<F
 
 #[cfg(test)]
 mod tests {
-    use super::{from_file, from_metadata, reusable};
+    use super::{from_file, from_metadata, reusable, snapshot};
 
     #[test]
     fn stable_file_versions_are_reusable() {
@@ -94,6 +131,9 @@ mod tests {
         let discovered = from_metadata(&metadata);
         let opened = from_file(&file, &metadata).unwrap();
         assert!(reusable(&discovered, &opened));
+        let opened = snapshot(&file).unwrap();
+        assert_eq!(opened.bytes, metadata.len());
+        assert!(reusable(&discovered, &opened.version));
         let _ = std::fs::remove_file(path);
     }
 }

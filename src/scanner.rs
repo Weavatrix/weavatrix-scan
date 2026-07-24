@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 mod compact;
+mod content_visit;
 mod entry;
 mod stream;
 mod watch_update;

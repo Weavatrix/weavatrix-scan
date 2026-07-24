@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Add `Scanner::visit_content`, a bounded parallel selected-content pipeline
+  with worker-local state, borrowed byte chunks, single-pass hash/binary
+  evidence, stable root/path identity, `SkipFile`/global `Quit`, selected
+  runtimes, and reentrant fallback.
+- Reuse one 64 KiB content buffer per worker instead of allocating one for
+  every selected file.
+- Add `ContentValidationPolicy::{Fast, Strict}` and consolidate Windows
+  by-handle size/version checks into one safe `winapi-util` query per
+  checkpoint.
 - Add direct parallel multi-root streaming callbacks with root-index tagging,
   shared `Skip`/`Quit`/cancellation semantics, selected-runtime support, and
   deterministic per-root reports.

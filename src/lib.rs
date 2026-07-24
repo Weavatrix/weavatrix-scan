@@ -11,6 +11,7 @@
 mod cache;
 mod config;
 mod content;
+mod content_visit;
 mod control;
 mod default_file_types;
 mod delta;
@@ -51,7 +52,11 @@ mod watch_notify;
 
 pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
 pub use config::{
-    CacheValidationPolicy, EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips,
+    CacheValidationPolicy, ContentValidationPolicy, EvidenceMode, IgnorePolicy, ScanLimits,
+    ScanOptions, StandardSkips,
+};
+pub use content_visit::{
+    ContentFile, ContentFileStatus, ContentVisitControl, ContentVisitEvent, ContentVisitReport,
 };
 pub use control::CancellationToken;
 pub use delta::{DeltaQuality, ModifiedFile, RenamedFile, ScanDelta};

@@ -66,7 +66,7 @@ pub(super) fn scan_repository_compact_with_runtime(
     })
 }
 
-fn discover_compact(
+pub(super) fn discover_compact(
     root: &Path,
     options: &ScanOptions,
     parallel_runtime: &ParallelRuntime,
@@ -384,7 +384,7 @@ fn inspect_compact(
     Ok(inspected_files)
 }
 
-fn apply_total_bytes_limit(
+pub(super) fn apply_total_bytes_limit(
     evidence: &mut ScanReport,
     files: &mut Vec<CompactScannedFile>,
     options: &ScanOptions,
@@ -421,7 +421,7 @@ fn apply_total_bytes_limit(
     evidence.terminate(crate::ScanTermination::MaxTotalBytes);
 }
 
-fn sort_evidence(report: &mut ScanReport) {
+pub(super) fn sort_evidence(report: &mut ScanReport) {
     report.skipped.sort_unstable_by(|left, right| {
         left.relative
             .cmp(&right.relative)
@@ -442,7 +442,7 @@ fn sort_evidence(report: &mut ScanReport) {
     report.ignore_sources.dedup();
 }
 
-fn compact_revision(evidence: &ScanReport, files: &[CompactScannedFile]) -> String {
+pub(super) fn compact_revision(evidence: &ScanReport, files: &[CompactScannedFile]) -> String {
     let mut revision = FingerprintHasher::new();
     for source in &evidence.ignore_sources {
         revision.write(format!("{:?}", source.kind).as_bytes());

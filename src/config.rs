@@ -51,6 +51,17 @@ pub enum CacheValidationPolicy {
     Strict,
 }
 
+/// Controls post-read snapshot verification for newly opened content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentValidationPolicy {
+    /// Verify the opened handle against discovery evidence before reading.
+    /// This is appropriate for latency-sensitive local search.
+    Fast,
+    /// Also re-check native file evidence after reading to reject concurrent
+    /// same-size modifications.
+    Strict,
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ScanOptions {
@@ -87,6 +98,8 @@ pub struct ScanOptions {
     pub cancellation: Option<CancellationToken>,
     /// Persistent hash validation policy.
     pub cache_validation: CacheValidationPolicy,
+    /// New content-read validation policy.
+    pub content_validation: ContentValidationPolicy,
     /// Low-level traversal policy.
     pub walk: WalkOptions,
 }
@@ -115,6 +128,7 @@ impl Default for ScanOptions {
             limits: ScanLimits::default(),
             cancellation: None,
             cache_validation: CacheValidationPolicy::Fast,
+            content_validation: ContentValidationPolicy::Strict,
             walk: WalkOptions::default().with_metadata(true),
         }
     }
@@ -257,6 +271,12 @@ impl ScanOptions {
     #[must_use]
     pub const fn with_cache_validation(mut self, policy: CacheValidationPolicy) -> Self {
         self.cache_validation = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_content_validation(mut self, policy: ContentValidationPolicy) -> Self {
+        self.content_validation = policy;
         self
     }
 

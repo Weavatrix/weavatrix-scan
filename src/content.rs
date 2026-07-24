@@ -1,14 +1,17 @@
 use crate::cache::{ScanCache, ScanCacheEntry};
 use crate::config::{CacheValidationPolicy, EvidenceMode, ScanOptions};
+use crate::content_visit::{ContentVisitControl, ContentVisitEvent};
 use crate::error::{Error, Result};
 use crate::file_version::reusable;
 use crate::report::{
-    ScanCacheStats, ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
+    CompactContentEvidence, CompactScannedFile, ScanCacheStats, ScanTermination, ScanWarning,
+    ScannedFile, SkipKind, SkippedEntry,
 };
 use crate::walker::ErrorPolicy;
-use inspect::Inspection;
+use inspect::{Inspection, VisitedStatus};
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
@@ -20,6 +23,66 @@ pub(crate) struct InspectedFiles {
     pub(crate) warnings: Vec<ScanWarning>,
     pub(crate) termination: Option<ScanTermination>,
     pub(crate) cache: ScanCacheStats,
+}
+
+pub(crate) struct VisitedFiles {
+    pub(crate) files: Vec<(u64, CompactScannedFile)>,
+    pub(crate) evidence: InspectedFiles,
+    pub(crate) opened: u64,
+    pub(crate) chunks: u64,
+    pub(crate) bytes_read: u64,
+    pub(crate) bytes_emitted: u64,
+    pub(crate) consumer_skipped: u64,
+    pub(crate) visitor_quit: bool,
+}
+
+impl VisitedFiles {
+    pub(crate) fn empty(capacity: usize) -> Self {
+        Self {
+            files: Vec::with_capacity(capacity),
+            evidence: InspectedFiles {
+                files: Vec::new(),
+                skipped: Vec::new(),
+                warnings: Vec::new(),
+                termination: None,
+                cache: ScanCacheStats::default(),
+            },
+            opened: 0,
+            chunks: 0,
+            bytes_read: 0,
+            bytes_emitted: 0,
+            consumer_skipped: 0,
+            visitor_quit: false,
+        }
+    }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.files.extend(other.files);
+        self.evidence.skipped.extend(other.evidence.skipped);
+        self.evidence.warnings.extend(other.evidence.warnings);
+        self.evidence.termination = self.evidence.termination.or(other.evidence.termination);
+        self.evidence.cache.reused_hashes = self
+            .evidence
+            .cache
+            .reused_hashes
+            .saturating_add(other.evidence.cache.reused_hashes);
+        self.evidence.cache.content_reads = self
+            .evidence
+            .cache
+            .content_reads
+            .saturating_add(other.evidence.cache.content_reads);
+        self.evidence.cache.fingerprint_reads = self
+            .evidence
+            .cache
+            .fingerprint_reads
+            .saturating_add(other.evidence.cache.fingerprint_reads);
+        self.opened = self.opened.saturating_add(other.opened);
+        self.chunks = self.chunks.saturating_add(other.chunks);
+        self.bytes_read = self.bytes_read.saturating_add(other.bytes_read);
+        self.bytes_emitted = self.bytes_emitted.saturating_add(other.bytes_emitted);
+        self.consumer_skipped = self.consumer_skipped.saturating_add(other.consumer_skipped);
+        self.visitor_quit |= other.visitor_quit;
+    }
 }
 
 pub(crate) fn inspect_files(
@@ -172,6 +235,141 @@ fn inspect_chunk(
         }
     }
     Ok(inspected)
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn visit_files<V>(
+    root: &Path,
+    files: Vec<(u64, CompactScannedFile)>,
+    options: &ScanOptions,
+    started: Instant,
+    worker_index: usize,
+    buffer: &mut [u8],
+    visitor: &mut V,
+) -> Result<VisitedFiles>
+where
+    V: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl,
+{
+    let mut visited = VisitedFiles::empty(files.len());
+    let stop = InspectionStop::default();
+    let mut iterator = files.into_iter();
+    while let Some((sequence, mut compact)) = iterator.next() {
+        if let Some(reason) = stop.reason(options, started) {
+            record_limit_skip(
+                &mut visited.evidence,
+                compact.relative.into(),
+                reason,
+                options,
+            );
+            if options.evidence == EvidenceMode::Complete {
+                visited
+                    .evidence
+                    .skipped
+                    .extend(iterator.map(|(_, file)| SkippedEntry {
+                        relative: file.relative.into(),
+                        kind: SkipKind::ScanLimit,
+                        detail: Some(format!("{reason:?}")),
+                    }));
+            }
+            visited.evidence.termination = Some(reason);
+            break;
+        }
+        let discovery = compact
+            .content
+            .take()
+            .expect("content visit retains file-version evidence");
+        let relative = compact.relative.into_string();
+        let mut scanned = ScannedFile {
+            absolute: root.join(&relative),
+            relative,
+            bytes: compact.bytes,
+            content_hash: None,
+            content_fingerprint: None,
+            version: discovery.version,
+            binary_checked: false,
+        };
+        visited.evidence.cache.content_reads =
+            visited.evidence.cache.content_reads.saturating_add(1);
+        match inspect::inspect_with_visitor(
+            &mut scanned,
+            options,
+            root,
+            sequence,
+            worker_index,
+            buffer,
+            visitor,
+        ) {
+            Ok(result) => {
+                let cancelled_without_result = result.status.is_none()
+                    && options
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(crate::CancellationToken::is_cancelled);
+                visited.opened = visited.opened.saturating_add(result.opened);
+                visited.chunks = visited.chunks.saturating_add(result.chunks);
+                visited.bytes_read = visited.bytes_read.saturating_add(result.bytes_read);
+                visited.bytes_emitted = visited.bytes_emitted.saturating_add(result.bytes_emitted);
+                if result.consumer_skipped {
+                    visited.consumer_skipped = visited.consumer_skipped.saturating_add(1);
+                }
+                match result.status {
+                    Some(VisitedStatus::Selected) => {
+                        visited.files.push((
+                            sequence,
+                            CompactScannedFile {
+                                relative: scanned.relative.into_boxed_str(),
+                                bytes: scanned.bytes,
+                                content: (options.hash_file_contents
+                                    || options.detect_binary_files)
+                                    .then(|| {
+                                        Box::new(CompactContentEvidence {
+                                            content_hash: scanned
+                                                .content_hash
+                                                .map(String::into_boxed_str),
+                                            content_fingerprint: scanned
+                                                .content_fingerprint
+                                                .map(String::into_boxed_str),
+                                            version: scanned.version,
+                                            binary_checked: scanned.binary_checked,
+                                        })
+                                    }),
+                            },
+                        ));
+                    }
+                    Some(VisitedStatus::Binary) => {
+                        record_binary_skip(&mut visited.evidence, scanned.relative, options);
+                    }
+                    Some(VisitedStatus::Concurrent) => {
+                        record_concurrent_modification(
+                            &mut visited.evidence,
+                            scanned.relative,
+                            options,
+                        )?;
+                    }
+                    None => {}
+                }
+                if result.visitor_quit {
+                    visited.visitor_quit = true;
+                    visited.evidence.termination = Some(ScanTermination::Cancelled);
+                    break;
+                }
+                if cancelled_without_result {
+                    visited.evidence.termination = Some(ScanTermination::Cancelled);
+                    break;
+                }
+            }
+            Err(source) => {
+                record_io_error(
+                    &mut visited.evidence,
+                    &scanned,
+                    "visit file content",
+                    source,
+                    options,
+                )?;
+            }
+        }
+    }
+    Ok(visited)
 }
 
 fn reusable_candidate(

@@ -27,8 +27,8 @@ layers:
 - `Walker`: iterative, streaming, lossless low-level traversal;
 - `WalkBuilder`: multi-root traversal, native sorting, directory filters, and
   contents-first ordering;
-- `Scanner`: ignore-aware deterministic manifest, hashes, revision, and typed
-  evidence;
+- `Scanner`: ignore-aware deterministic manifest, hashes, revision, typed
+  evidence, and bounded one-pass selected-content callbacks;
 - `CompactScanReport`: the same deterministic selection and revision with one
   retained root path and optional boxed rich evidence for million-file
   manifests;
@@ -88,6 +88,7 @@ walker workload:
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
 | Parallel collected / streaming traversal | Yes / visitor + bounded pull | No / callback | No / serial iterator | No / ordered iterator |
 | Deterministic backpressured scan sink | Yes | No | No | No |
+| Parallel one-pass verified content callback | Yes | No | No | No |
 | Parallel pull iterator | Bounded unordered / ordered DFS | No (callback API) | No | Ordered DFS |
 | Parallel multi-root raw traversal | Collected + streaming | Streaming callback | No | No |
 | Parallel multi-root manifest scanner | Yes | No | No | No |
@@ -144,6 +145,13 @@ mandatory for other users:
 ```toml
 weavatrix-scan = { version = "0.2", features = ["notify"] }
 ```
+
+The default build has no third-party runtime dependency on Unix. Windows uses
+the small `winapi-util` safe wrapper for file, volume, and redirected-stdout
+identity because the equivalent `std` by-handle identity APIs remain unstable
+on the Rust 1.88 MSRV. Reimplementing that layer locally would require unsafe
+WinAPI FFI and still depend on Windows bindings; this crate keeps
+`unsafe_code = "forbid"`.
 
 ## Quick start
 
@@ -444,6 +452,57 @@ assert_eq!(summary.selected, summary.emitted);
 # Ok::<(), weavatrix_scan::Error>(())
 ```
 
+For Search, Clone, and language adapters that need bytes, `visit_content`
+connects ignore-aware traversal to bounded parallel content workers. A
+worker-local callback receives borrowed chunks from the same read used for
+binary detection and optional SHA-256 evidence:
+
+```rust
+use weavatrix_scan::{
+    ContentFileStatus, ContentValidationPolicy, ContentVisitControl,
+    ContentVisitEvent, ScanOptions, Scanner,
+};
+
+let options = ScanOptions::default()
+    .with_extensions(["rs", "go", "ts", "py"])
+    .with_content_validation(ContentValidationPolicy::Strict);
+
+let summary = Scanner::new(".")
+    .options(options)
+    .visit_content(|_worker_index| {
+        let mut file_bytes = 0_u64;
+        move |event| {
+            match event {
+                ContentVisitEvent::FileStart { .. } => file_bytes = 0,
+                ContentVisitEvent::Chunk { bytes, .. } => {
+                    file_bytes += u64::try_from(bytes.len()).unwrap();
+                }
+                ContentVisitEvent::FileEnd {
+                    status: ContentFileStatus::Selected,
+                    ..
+                } => {
+                    std::hint::black_box(file_bytes);
+                }
+                ContentVisitEvent::FileEnd { .. } => {}
+            }
+            ContentVisitControl::Continue
+        }
+    })?;
+
+println!("files={}, bytes={}", summary.completed, summary.bytes_read);
+# Ok::<(), weavatrix_scan::Error>(())
+```
+
+`ContentVisitControl::SkipFile` suppresses remaining chunks for one file while
+allowing required hash/binary evidence to finish. `Quit` cancels every worker.
+Events include `root_index`, root path, normalized relative path, and a
+monotonic sequence. Sort durable results by `(root_index, relative)`.
+`ContentValidationPolicy::Strict` verifies native file evidence before and
+after the read; `Fast` keeps the safe opened-handle check but omits the
+post-read check for latency-sensitive local search. A deterministic total-byte
+budget automatically uses the compact two-phase path so budget selection
+remains path-order stable.
+
 ## Output contract
 
 `ScanReport` contains:
@@ -484,8 +543,8 @@ SHA-256 values. External ignore-source locations are removed. Its
 `selection_portable` field separately records whether host-level Git
 configuration affected file selection.
 
-Future content consumers such as Search or Clone can bind bytes back to the
-full local report:
+Consumers reopening an existing snapshot can bind bytes back to the full local
+report:
 
 ```rust
 use weavatrix_scan::{Scanner, SnapshotEvidence};
@@ -506,6 +565,15 @@ rejects path escapes and symlinks, enforces an optional byte limit, and compares
 size plus native file-version evidence before and after reading. When a content
 hash exists, returned bytes must also match the recorded SHA-256. A missing or
 changed file produces typed `SnapshotReadError::Stale` evidence.
+
+### Weavatrix package boundary
+
+Scan owns repository selection, safe bounded content delivery, hashes,
+revision, cancellation, and incremental deltas. Search owns literal/regex
+matching, line context, encodings, compressed inputs, indexes, and result
+formatting. Clone owns token normalization, Moss/winnowing, MinHash/LSH,
+Aho-Corasick, and clone grouping. Graph consumes normalized facts and keeps
+graph algorithms; content-search and clone algorithms do not belong there.
 
 ## Incremental consumers
 
@@ -619,6 +687,7 @@ from "unreadable" or "outside the repository."
 | `standard_skips` | Enabled | Skip generated/vendor directories |
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
 | `cache_validation` | `Fast` | Trust file-version evidence, or verify a whole-content fingerprint in `Strict` mode |
+| `content_validation` | `Strict` | Verify newly opened content before and after reading, or omit the post-read check in `Fast` mode |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
 | `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
 | `parallelism` | `0` | Traversal/content workers; zero uses bounded available parallelism |
@@ -888,6 +957,29 @@ faster on this sample. Each process result is itself the median of 11
 interleaved measured runs after two warmups, not a single best run. Watcher
 planning and changed-path scan profiles remain in the same reproducible
 benchmark.
+
+The one-pass content profile selects and reads the same 6,001 tiny files in
+every case. `Fast` and the corresponding `ignore` baseline both validate the
+opened handle once; `Strict` and its baseline validate before and after the
+read. The raw `ignore` row intentionally omits snapshot validation and is the
+lower-contract throughput floor:
+
+| Content pipeline | Validation | Median |
+| --- | --- | ---: |
+| Weavatrix `visit_content` | Opened handle | 75.908 ms |
+| `ignore` + `File::read` | Opened handle | 75.946 ms |
+| Weavatrix `visit_content` | Before and after | 73.698 ms |
+| `ignore` + `File::read` | Before and after | 79.673 ms |
+| `ignore` + `File::read` | None | 71.576 ms |
+
+These are five independent process medians from 11 interleaved samples after
+two warmups, measured on the Windows host above. Reusing one 64 KiB buffer per
+worker removed per-file allocation pressure. On this tiny-file fixture,
+Weavatrix matched the equivalent fast baseline and was 7.5% faster than the
+equivalent strict baseline; raw unchecked reading remained 6.1% faster than
+Weavatrix Fast. This validates the scanner-to-consumer handoff, not future
+literal or regex matching: final comparison with ripgrep belongs to the Search
+package and must include matched output, line handling, and encoding policy.
 
 Source review explains the remaining differences:
 

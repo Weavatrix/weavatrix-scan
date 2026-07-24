@@ -6,15 +6,31 @@ impl ScanOptions {
         if file_count == 0 {
             return 1;
         }
+        let requested = self.requested_content_workers();
+        requested.min(file_count.div_ceil(128)).max(1)
+    }
+
+    pub(crate) fn content_visit_worker_count(&self, file_count: usize) -> usize {
         let parallelism = self.content_parallelism.unwrap_or(self.parallelism);
         let requested = if parallelism == 0 {
+            std::thread::available_parallelism()
+                .map_or(1, std::num::NonZeroUsize::get)
+                .min(32)
+        } else {
+            parallelism
+        };
+        requested.min(file_count).max(1)
+    }
+
+    fn requested_content_workers(&self) -> usize {
+        let parallelism = self.content_parallelism.unwrap_or(self.parallelism);
+        if parallelism == 0 {
             std::thread::available_parallelism()
                 .map_or(1, std::num::NonZeroUsize::get)
                 .min(if cfg!(windows) { 8 } else { 16 })
         } else {
             parallelism
-        };
-        requested.min(file_count.div_ceil(128)).max(1)
+        }
     }
 
     pub(crate) fn uses_parallel_traversal(&self) -> bool {

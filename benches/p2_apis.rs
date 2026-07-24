@@ -2,13 +2,16 @@ mod support;
 
 use ignore::{WalkBuilder as IgnoreWalkBuilder, WalkState};
 use jwalk::{WalkDir as JWalkDir, WalkDirGeneric as JWalkDirGeneric};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use support::{
-    BenchmarkCase, EXTENSIONS, Fixture, RAW_FILES, SOURCE_FILES, measure_group, print_measurement,
+    BenchmarkCase, EXTENSIONS, Fixture, IGNORE_AWARE_FILES, RAW_FILES, SOURCE_FILES, measure_group,
+    print_measurement,
 };
 use weavatrix_scan::{
+    ContentFileStatus, ContentValidationPolicy, ContentVisitControl, ContentVisitEvent,
     ParallelMultiWalker, ParallelWalker, RootSymlinkPolicy, ScanOptions, Scanner,
     StatefulWalkBuilder, StatefulWalkEntry, WalkBuilder, WalkControl, WalkEntry, WalkEvent,
     WalkOptions, Walker, WatchEvent, WatchEventKind, WatcherEventAdapter,
@@ -23,8 +26,188 @@ fn main() {
     benchmark_parallel_pull(&fixture);
     benchmark_directory_callbacks(&fixture);
     benchmark_parallel_multi_stream(&fixture);
+    benchmark_content_visit(&fixture);
     benchmark_root_policy(&fixture);
     benchmark_watcher_adapter(&fixture);
+}
+
+fn benchmark_content_visit(fixture: &Fixture) {
+    let mut cases = vec![
+        BenchmarkCase::new("weavatrix-content-fast", || {
+            weavatrix_content_count(&fixture.root, ContentValidationPolicy::Fast, 0)
+        }),
+        BenchmarkCase::new("weavatrix-content-strict", || {
+            weavatrix_content_count(&fixture.root, ContentValidationPolicy::Strict, 0)
+        }),
+        BenchmarkCase::new("ignore-content-visit", || {
+            ignore_content_count(&fixture.root, SnapshotChecks::None)
+        }),
+        BenchmarkCase::new("ignore-content-open-verified", || {
+            ignore_content_count(&fixture.root, SnapshotChecks::Before)
+        }),
+        BenchmarkCase::new("ignore-content-verified", || {
+            ignore_content_count(&fixture.root, SnapshotChecks::BeforeAndAfter)
+        }),
+    ];
+    let results = measure_group(&mut cases);
+    for (case, result) in cases.iter().zip(results) {
+        assert_eq!(result.count, IGNORE_AWARE_FILES);
+        print_measurement("parallel-content-visit", case.name, &result);
+    }
+}
+
+fn weavatrix_content_count(
+    root: &Path,
+    validation: ContentValidationPolicy,
+    workers: usize,
+) -> usize {
+    let files = Arc::new(AtomicUsize::new(0));
+    let bytes = Arc::new(AtomicU64::new(0));
+    let report = Scanner::new(root)
+        .options(
+            ScanOptions::default()
+                .with_extensions(EXTENSIONS.iter().copied())
+                .selected_files_only()
+                .metadata_only()
+                .with_content_parallelism(workers)
+                .with_content_validation(validation),
+        )
+        .visit_content({
+            let files = Arc::clone(&files);
+            let bytes = Arc::clone(&bytes);
+            move |_| {
+                let files = Arc::clone(&files);
+                let bytes = Arc::clone(&bytes);
+                move |event| {
+                    match event {
+                        ContentVisitEvent::Chunk { bytes: chunk, .. } => {
+                            bytes.fetch_add(u64::try_from(chunk.len()).unwrap(), Ordering::Relaxed);
+                        }
+                        ContentVisitEvent::FileEnd {
+                            status: ContentFileStatus::Selected,
+                            ..
+                        } => {
+                            files.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ContentVisitEvent::FileStart { .. } | ContentVisitEvent::FileEnd { .. } => {
+                        }
+                    }
+                    ContentVisitControl::Continue
+                }
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        usize::try_from(report.completed).unwrap(),
+        files.load(Ordering::Relaxed)
+    );
+    std::hint::black_box(bytes.load(Ordering::Relaxed));
+    files.load(Ordering::Relaxed)
+}
+
+#[derive(Clone, Copy)]
+enum SnapshotChecks {
+    None,
+    Before,
+    BeforeAndAfter,
+}
+
+fn ignore_content_count(root: &Path, snapshot_checks: SnapshotChecks) -> usize {
+    let files = Arc::new(AtomicUsize::new(0));
+    let bytes = Arc::new(AtomicU64::new(0));
+    let mut builder = IgnoreWalkBuilder::new(root);
+    builder
+        .add_custom_ignore_filename(".weavatrixignore")
+        .require_git(false);
+    builder.build_parallel().run(|| {
+        let files = Arc::clone(&files);
+        let bytes = Arc::clone(&bytes);
+        Box::new(move |result| {
+            if let Ok(entry) = result
+                && entry.file_type().is_some_and(|kind| kind.is_file())
+                && has_extension(entry.path())
+            {
+                let mut file = std::fs::File::open(entry.path()).unwrap();
+                let before = match snapshot_checks {
+                    SnapshotChecks::None => None,
+                    SnapshotChecks::Before | SnapshotChecks::BeforeAndAfter => {
+                        Some(benchmark_snapshot(&file))
+                    }
+                };
+                let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+                let mut read_bytes = 0_u64;
+                loop {
+                    let read = file.read(&mut buffer).unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    let read = u64::try_from(read).unwrap();
+                    read_bytes = read_bytes.saturating_add(read);
+                    bytes.fetch_add(read, Ordering::Relaxed);
+                }
+                if let Some(before) = before {
+                    assert_eq!(read_bytes, before.bytes);
+                    if matches!(snapshot_checks, SnapshotChecks::BeforeAndAfter) {
+                        assert_eq!(benchmark_snapshot(&file), before);
+                    }
+                }
+                files.fetch_add(1, Ordering::Relaxed);
+            }
+            WalkState::Continue
+        })
+    });
+    std::hint::black_box(bytes.load(Ordering::Relaxed));
+    files.load(Ordering::Relaxed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BenchmarkSnapshot {
+    bytes: u64,
+    modified: Option<u128>,
+    file_system: Option<u64>,
+    file: Option<u64>,
+}
+
+#[cfg(windows)]
+fn benchmark_snapshot(file: &std::fs::File) -> BenchmarkSnapshot {
+    let information = winapi_util::file::information(file).unwrap();
+    BenchmarkSnapshot {
+        bytes: information.file_size(),
+        modified: information.last_write_time().map(u128::from),
+        file_system: Some(information.volume_serial_number()),
+        file: Some(information.file_index()),
+    }
+}
+
+#[cfg(unix)]
+fn benchmark_snapshot(file: &std::fs::File) -> BenchmarkSnapshot {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file.metadata().unwrap();
+    BenchmarkSnapshot {
+        bytes: metadata.len(),
+        modified: u128::try_from(metadata.mtime())
+            .ok()
+            .zip(u128::try_from(metadata.mtime_nsec()).ok())
+            .map(|(seconds, nanos)| seconds.saturating_mul(1_000_000_000) + nanos),
+        file_system: Some(metadata.dev()),
+        file: Some(metadata.ino()),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn benchmark_snapshot(file: &std::fs::File) -> BenchmarkSnapshot {
+    let metadata = file.metadata().unwrap();
+    BenchmarkSnapshot {
+        bytes: metadata.len(),
+        modified: metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos()),
+        file_system: None,
+        file: None,
+    }
 }
 
 fn benchmark_parallel_pull(fixture: &Fixture) {
