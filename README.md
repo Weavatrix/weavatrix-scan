@@ -134,21 +134,21 @@ and macOS; the million-file profile remains opt-in.
 
 ```toml
 [dependencies]
-weavatrix-scan = "0.2"
+weavatrix-scan = "0.3"
 ```
 
 Enable serialization only when needed:
 
 ```toml
 [dependencies]
-weavatrix-scan = { version = "0.2", features = ["serde"] }
+weavatrix-scan = { version = "0.3", features = ["serde"] }
 ```
 
 Enable direct conversion from `notify::Event` without making a watcher runtime
 mandatory for other users:
 
 ```toml
-weavatrix-scan = { version = "0.2", features = ["notify"] }
+weavatrix-scan = { version = "0.3", features = ["notify"] }
 ```
 
 The default build has no third-party runtime dependency on Unix. Windows uses
