@@ -1,5 +1,8 @@
 use super::support::Fixture;
+use std::error::Error as _;
 use std::fs;
+use std::io;
+use std::path::PathBuf;
 use weavatrix_scan::{
     IgnoreSourceEvidence, IgnoreSourceKind, ScanOptions, ScanWarning, Scanner, SkipKind,
     SkippedEntry, SnapshotEvidence, SnapshotReadError,
@@ -125,5 +128,76 @@ fn snapshot_provider_supports_version_evidence_and_rejects_path_escape() {
     assert!(matches!(
         report.content_provider(),
         Err(SnapshotReadError::InvalidReport { .. })
+    ));
+}
+
+#[test]
+fn snapshot_errors_and_report_validation_are_explicit() {
+    let fixture = Fixture::new("snapshot-validation");
+    fixture.write("a.rs", "fn a() {}\n");
+    fixture.write("b.rs", "fn b() {}\n");
+    let report = Scanner::new(&fixture.root)
+        .options(ScanOptions::default().with_extensions(["rs"]))
+        .scan()
+        .unwrap();
+
+    let errors = [
+        SnapshotReadError::InvalidReport {
+            relative: None,
+            reason: "invalid root",
+        },
+        SnapshotReadError::UnknownFile("unknown.rs".to_owned()),
+        SnapshotReadError::LimitExceeded {
+            relative: "large.rs".to_owned(),
+            bytes: 2,
+            max_bytes: 1,
+        },
+        SnapshotReadError::Stale("stale.rs".to_owned()),
+    ];
+    for error in errors {
+        assert!(!error.to_string().is_empty());
+        assert!(error.source().is_none());
+    }
+    let io_error = SnapshotReadError::Io {
+        relative: "io.rs".to_owned(),
+        source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+    };
+    assert!(io_error.to_string().contains("io.rs"));
+    assert!(io_error.source().is_some());
+
+    let mut relative_root = report.clone();
+    relative_root.root = PathBuf::from("relative");
+    assert!(matches!(
+        relative_root.content_provider(),
+        Err(SnapshotReadError::InvalidReport { relative: None, .. })
+    ));
+
+    let mut unsorted = report.clone();
+    unsorted.files.reverse();
+    assert!(matches!(
+        unsorted.content_provider(),
+        Err(SnapshotReadError::InvalidReport { .. })
+    ));
+
+    let mut mismatched = report.clone();
+    mismatched.files[0].relative = "wrong.rs".to_owned();
+    assert!(matches!(
+        mismatched.content_provider(),
+        Err(SnapshotReadError::InvalidReport { .. })
+    ));
+
+    let mut unverifiable = report.clone();
+    unverifiable.files[0].content_hash = None;
+    unverifiable.files[0].version.modified_ns = None;
+    assert!(matches!(
+        unverifiable.content_provider(),
+        Err(SnapshotReadError::InvalidReport { .. })
+    ));
+
+    let provider = report.content_provider().unwrap();
+    fs::remove_file(fixture.root.join("a.rs")).unwrap();
+    assert!(matches!(
+        provider.read("a.rs"),
+        Err(SnapshotReadError::Stale(relative)) if relative == "a.rs"
     ));
 }

@@ -60,6 +60,7 @@ fn non_utf8_paths_and_symlink_loops_have_lossless_differential_evidence() {
     assert!(loop_errors > 0);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_rules_are_lossless_and_percent_rules_match_ignore() {
     use std::ffi::OsString;

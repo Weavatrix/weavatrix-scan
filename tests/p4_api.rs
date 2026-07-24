@@ -10,7 +10,7 @@ use support::Fixture;
 use weavatrix_scan::{
     NamedFileTypes, ParallelExecutor, ParallelJob, ParallelMultiWalker, ParallelRuntime,
     ParallelWalker, ScanOptions, Scanner, StatefulWalkBuilder, WalkBuilder, WalkControl, WalkEvent,
-    WalkOperation, WalkOptions, Walker,
+    WalkOperation, WalkOptions, Walker, scan_repository_compact,
 };
 
 #[test]
@@ -173,6 +173,18 @@ fn compact_manifest_matches_full_manifest_without_absolute_path_duplication() {
             .map(|file| file.content_hash.as_deref())
             .collect::<Vec<_>>()
     );
+    let cache = rich_compact.to_cache();
+    assert_eq!(cache.root, rich_compact.root);
+    assert_eq!(cache.entries.len(), rich_compact.files.len());
+    assert!(
+        cache
+            .entries
+            .iter()
+            .all(|entry| entry.content_hash.starts_with("sha256:"))
+    );
+
+    let default_compact = scan_repository_compact(&fixture.root).unwrap();
+    assert!(!default_compact.files.is_empty());
 }
 
 #[test]

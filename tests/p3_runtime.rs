@@ -76,3 +76,56 @@ fn worker_callback_panic_propagates_and_pool_remains_usable() {
             .any(weavatrix_scan::WalkEntry::is_file)
     );
 }
+
+#[test]
+fn nested_parallel_visit_uses_serial_fallback_controls() {
+    let fixture = support::Fixture::new("scan-runtime-nested-visit");
+    fixture.write("branch-00/skipped.rs", "fn skipped() {}\n");
+    fixture.write("branch-01/stop.rs", "fn stop() {}\n");
+    let root = fixture.root.clone();
+    let started = Arc::new(AtomicBool::new(false));
+    let skipped_file_seen = Arc::new(AtomicBool::new(false));
+    let nested_quit = Arc::new(AtomicBool::new(false));
+
+    let outer = ParallelWalker::new(&fixture.root)
+        .with_parallelism(4)
+        .visit({
+            let started = Arc::clone(&started);
+            let skipped_file_seen = Arc::clone(&skipped_file_seen);
+            let nested_quit = Arc::clone(&nested_quit);
+            move |event| {
+                if matches!(event, WalkEvent::Entry(entry) if entry.depth() > 0)
+                    && !started.swap(true, Ordering::AcqRel)
+                {
+                    let skipped_file_seen = Arc::clone(&skipped_file_seen);
+                    let nested = ParallelWalker::new(&root)
+                        .with_parallelism(4)
+                        .visit(move |nested_event| match nested_event {
+                            WalkEvent::Entry(entry)
+                                if entry.relative_path() == std::path::Path::new("branch-00") =>
+                            {
+                                WalkControl::Skip
+                            }
+                            WalkEvent::Entry(entry)
+                                if entry.relative_path()
+                                    == std::path::Path::new("branch-00/skipped.rs") =>
+                            {
+                                skipped_file_seen.store(true, Ordering::Release);
+                                WalkControl::Continue
+                            }
+                            WalkEvent::Entry(entry) if entry.is_file() => WalkControl::Quit,
+                            WalkEvent::Entry(_) | WalkEvent::Error(_) => WalkControl::Continue,
+                        })
+                        .unwrap();
+                    nested_quit.store(nested.quit, Ordering::Release);
+                }
+                WalkControl::Continue
+            }
+        })
+        .unwrap();
+
+    assert!(outer.visited > 0);
+    assert!(started.load(Ordering::Acquire));
+    assert!(nested_quit.load(Ordering::Acquire));
+    assert!(!skipped_file_seen.load(Ordering::Acquire));
+}
