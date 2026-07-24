@@ -6,9 +6,9 @@ All notable changes to this project are documented here.
 
 ## 0.3.0 - 2026-07-24
 
-- Enable `notify`'s native macOS backend, resolve redirected stdout through
-  `/dev/fd/1`, and keep raw non-UTF8 ignore coverage separate from UTF-8-only
-  reference-matcher differential checks.
+- Enable `notify`'s native macOS backend, identify redirected Unix stdout from
+  a safely duplicated descriptor, and keep raw non-UTF8 ignore coverage
+  separate from UTF-8-only reference-matcher differential checks.
 - Add `Scanner::visit_content`, a bounded parallel selected-content pipeline
   with worker-local state, borrowed byte chunks, single-pass hash/binary
   evidence, stable root/path identity, `SkipFile`/global `Quit`, selected
