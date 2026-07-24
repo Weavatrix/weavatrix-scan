@@ -1034,16 +1034,18 @@ Source review explains the remaining differences:
   specializes prefix/suffix globs, prefilters complex patterns, and sorts only
   the final report.
 
-The optional real-repository benchmark keeps repository identities and paths
-local; published documentation records only synthetic corpus results. It first
-asserts the exact same sorted `(normalized path, bytes)` manifest. The stress
-profile also measured a skewed raw tree at 6.7 ms (`ParallelWalker`), 8.2 ms
-(`jwalk`), and 14.1 ms (`walkdir`). The expanded deep-tree profile contains 60
-levels and 7,680 files; five independent process medians measured 18.9 ms for
-`Walker` and 20.0 ms for `walkdir`, making `Walker` 5.6% faster on that sample.
-An unchanged 12 MiB SHA-256 manifest fell from 164.4 ms full scan to 1.9 ms
-with incremental hash reuse. Treat these as reproducible samples, not
-universal constants.
+The optional real-repository benchmark keeps repository identities, paths, and
+individual measurements local. Published documentation contains only synthetic
+and hosted-runner corpus results. Every local comparison first asserts the exact
+same sorted `(normalized path, bytes)` manifest.
+
+The synthetic stress profile measured a skewed raw tree at 6.7 ms
+(`ParallelWalker`), 8.2 ms (`jwalk`), and 14.1 ms (`walkdir`). The expanded
+synthetic deep-tree profile contains 60 levels and 7,680 files; five independent
+process medians measured 18.9 ms for `Walker` and 20.0 ms for `walkdir`, making
+`Walker` 5.6% faster on that sample. An unchanged synthetic 12 MiB SHA-256
+manifest fell from 164.4 ms full scan to 1.9 ms with incremental hash reuse.
+Treat these as reproducible samples, not universal constants.
 
 ## Correctness checks
 
