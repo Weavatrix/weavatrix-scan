@@ -447,23 +447,10 @@ Source review explains the remaining differences:
   specializes prefix/suffix globs, prefilters complex patterns, and sorts only
   the final report.
 
-Exact-path real-repository sample:
-
-| Repository | Files | weavatrix-scan | ignore |
-| --- | ---: | ---: | ---: |
-| radiochron | 86 | 18.7 ms | 22.9 ms |
-| grpc-server | 30 | 5.4 ms | 5.6 ms |
-| bgp-speaker | 30 | 4.7 ms | 5.6 ms |
-| controller-rest-api | 1,085 | 38.3 ms | 38.4 ms |
-| frontend | 1,689 | 39.8 ms | 46.3 ms |
-| analytics | 361 | 40.6 ms | 40.4 ms |
-| automation | 1,670 | 22.6 ms | 22.2 ms |
-
-Every real row first asserts the exact same sorted `(normalized path, bytes)`
-manifest. Weavatrix is faster on five repositories; the remaining two are
-within 2%, below the observed run-to-run variance. Timing varies by filesystem,
-cache, antivirus, and CPU, so treat the table as a reproducible sample rather
-than a universal constant.
+The optional real-repository benchmark keeps repository identities, paths, and
+individual measurements local. Published documentation contains only synthetic
+and hosted-runner corpus results. Every local comparison first asserts the exact
+same sorted `(normalized path, bytes)` manifest.
 
 ## Correctness checks
 
