@@ -1,3 +1,4 @@
+use crate::file_version::reusable;
 use crate::report::{ScanReport, ScannedFile};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -141,7 +142,7 @@ fn same_content(previous: &ScannedFile, current: &ScannedFile) -> bool {
     previous.bytes == current.bytes
         && match (&previous.content_hash, &current.content_hash) {
             (Some(previous), Some(current)) => previous == current,
-            _ => true,
+            _ => reusable(&previous.version, &current.version),
         }
 }
 

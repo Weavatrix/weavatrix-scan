@@ -48,10 +48,13 @@ fn benchmark_raw_discovery(fixture: &Fixture) {
 }
 
 fn benchmark_ignore_aware_discovery(fixture: &Fixture) {
-    let expected = weavatrix_manifest(&fixture.root, true);
+    let expected = weavatrix_manifest(&fixture.root, true, 1);
     let mut cases = vec![
-        BenchmarkCase::new("weavatrix-scan", || {
-            checked_len(&weavatrix_manifest(&fixture.root, true), &expected)
+        BenchmarkCase::new("weavatrix-scan-serial", || {
+            checked_len(&weavatrix_manifest(&fixture.root, true, 1), &expected)
+        }),
+        BenchmarkCase::new("weavatrix-scan-parallel", || {
+            checked_len(&weavatrix_manifest(&fixture.root, true, 4), &expected)
         }),
         BenchmarkCase::new("ignore", || {
             checked_len(&ignore_manifest(&fixture.root, true), &expected)
@@ -85,9 +88,10 @@ fn checked_len(actual: &Manifest, expected: &Manifest) -> usize {
     actual.len()
 }
 
-fn weavatrix_manifest(root: &Path, respect_ignore_files: bool) -> Manifest {
+fn weavatrix_manifest(root: &Path, respect_ignore_files: bool, parallelism: usize) -> Manifest {
     let mut options = ScanOptions::default()
         .with_extensions(EXTENSIONS)
+        .with_parallelism(parallelism)
         .metadata_only();
     options = options.selected_files_only();
     options.standard_skips = StandardSkips::Disabled;

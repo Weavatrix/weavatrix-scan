@@ -1,3 +1,4 @@
+use crate::walk_builder::{EntryFilter, EntrySorter};
 use crate::walk_platform::{
     DirectoryIdentity, FileSystemId, PlatformDirectoryInfo, directory_info,
 };
@@ -15,6 +16,7 @@ pub(crate) struct PendingDirectory {
     pub(crate) path: PathBuf,
     pub(crate) depth: usize,
     pub(crate) identity: Option<DirectoryIdentity>,
+    pub(crate) post_entry: Option<WalkEntry>,
 }
 
 // Keeping ReadDir inline avoids one heap allocation per directory on the hot
@@ -43,6 +45,7 @@ pub(crate) struct DirectoryFrame {
     pub(crate) depth: usize,
     pub(crate) entries: DirectoryEntries,
     pub(crate) identity: Option<DirectoryIdentity>,
+    pub(crate) post_entry: Option<WalkEntry>,
 }
 
 /// Iterative depth-first filesystem walker.
@@ -51,6 +54,7 @@ pub(crate) struct DirectoryFrame {
 /// Open directory handles are bounded by `WalkOptions::max_open`; when a deep
 /// tree reaches the limit, the oldest remaining directory entries are buffered
 /// and its handle is closed.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Walker {
     pub(crate) root: Arc<PathBuf>,
     pub(crate) root_components: usize,
@@ -65,6 +69,10 @@ pub struct Walker {
     pub(crate) skip_pending_directory: bool,
     pub(crate) active_directories: HashSet<DirectoryIdentity>,
     pub(crate) finished: bool,
+    pub(crate) sorter: Option<EntrySorter>,
+    pub(crate) filter: Option<EntryFilter>,
+    pub(crate) contents_first: bool,
+    pub(crate) deferred_entry: Option<WalkEntry>,
 }
 
 impl Walker {
@@ -83,6 +91,16 @@ impl Walker {
     ///
     /// Returns an error when the root cannot be resolved or inspected.
     pub fn with_options(root: impl AsRef<Path>, options: WalkOptions) -> Result<Self, WalkError> {
+        Self::with_behavior(root, options, None, None, false)
+    }
+
+    pub(crate) fn with_behavior(
+        root: impl AsRef<Path>,
+        options: WalkOptions,
+        sorter: Option<EntrySorter>,
+        filter: Option<EntryFilter>,
+        contents_first: bool,
+    ) -> Result<Self, WalkError> {
         let requested = root.as_ref();
         let options = options.normalized();
         let canonical = if options.follow_links || options.same_file_system {
@@ -135,6 +153,10 @@ impl Walker {
             skip_pending_directory: false,
             active_directories: HashSet::new(),
             finished: false,
+            sorter,
+            filter,
+            contents_first,
+            deferred_entry: None,
         })
     }
 
@@ -143,6 +165,7 @@ impl Walker {
         directory: PathBuf,
         depth: usize,
         options: WalkOptions,
+        root_file_system: Option<FileSystemId>,
     ) -> Self {
         let options = options.normalized();
         let root_components = root.components().count();
@@ -150,7 +173,7 @@ impl Walker {
             root: Arc::clone(root),
             root_components,
             root_file_type: None,
-            root_file_system: None,
+            root_file_system,
             root_directory_info: None,
             options,
             frames: Vec::new(),
@@ -160,10 +183,15 @@ impl Walker {
                 path: directory,
                 depth,
                 identity: None,
+                post_entry: None,
             }),
             skip_pending_directory: false,
             active_directories: HashSet::new(),
             finished: false,
+            sorter: None,
+            filter: None,
+            contents_first: false,
+            deferred_entry: None,
         }
     }
 
@@ -198,21 +226,38 @@ impl Walker {
                 if let Some(identity) = pending.identity {
                     self.active_directories.insert(identity);
                 }
+                let (entries, opened) = match self.sorter.as_ref() {
+                    None => (DirectoryEntries::Open(entries), true),
+                    Some(sorter) => {
+                        let mut entries = entries.collect::<Vec<_>>();
+                        entries.sort_by(|left, right| match (left, right) {
+                            (Ok(left), Ok(right)) => sorter(&left.file_name(), &right.file_name()),
+                            (Err(_), Ok(_)) => std::cmp::Ordering::Less,
+                            (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
+                            (Err(_), Err(_)) => std::cmp::Ordering::Equal,
+                        });
+                        (DirectoryEntries::Buffered(entries.into()), false)
+                    }
+                };
                 self.frames.push(DirectoryFrame {
                     path: pending.path,
                     depth: pending.depth,
-                    entries: DirectoryEntries::Open(entries),
+                    entries,
                     identity: pending.identity,
+                    post_entry: pending.post_entry,
                 });
-                self.open_handles += 1;
+                self.open_handles += usize::from(opened);
                 None
             }
-            Err(source) => Some(WalkError::new(
-                pending.path,
-                pending.depth,
-                WalkOperation::ReadDirectory,
-                source,
-            )),
+            Err(source) => {
+                self.deferred_entry = pending.post_entry;
+                Some(WalkError::new(
+                    pending.path,
+                    pending.depth,
+                    WalkOperation::ReadDirectory,
+                    source,
+                ))
+            }
         }
     }
 

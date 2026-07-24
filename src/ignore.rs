@@ -1,4 +1,5 @@
-use crate::path::{RevisionHasher, normalized_relative_path};
+use crate::hash::FingerprintHasher;
+use crate::path::normalized_relative_path;
 use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind};
 use std::collections::HashMap;
 use std::fmt;
@@ -18,7 +19,7 @@ mod rules;
 mod tests;
 
 #[cfg(test)]
-use git::{expand_home, read_excludes_setting, resolve_git_directory};
+use git::{expand_home, read_excludes_setting, read_excludes_setting_for, resolve_git_directory};
 use matcher::RuleMatcher;
 use parser::parse_file;
 pub use repository::RepositoryMatcher;
@@ -156,8 +157,8 @@ pub(crate) fn build_child_rules(
     let mut evidence = Vec::new();
     for name in ignore_files {
         let path = directory.join(name);
-        let text = match read_local_rule_file(&path) {
-            Ok(text) => text,
+        let bytes = match read_local_rule_file(&path) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => {
                 errors.push(IgnoreError {
@@ -169,9 +170,9 @@ pub(crate) fn build_child_rules(
             }
         };
         let (rank, kind) = source_for_name(name);
-        parse_file(
+        parser::parse_file_bytes(
             &path,
-            &text,
+            &bytes,
             case_insensitive,
             &mut rules_by_source[rank.index()],
             &mut errors,
@@ -179,7 +180,7 @@ pub(crate) fn build_child_rules(
         evidence.push(source_evidence(
             kind,
             normalized_evidence_location(&path, evidence_root),
-            &text,
+            &bytes,
         ));
     }
     for (index, rules) in rules_by_source.into_iter().enumerate() {
@@ -237,10 +238,10 @@ fn source_for_name(name: &str) -> (SourceRank, IgnoreSourceKind) {
 fn source_evidence(
     kind: IgnoreSourceKind,
     location: String,
-    contents: &str,
+    contents: &[u8],
 ) -> IgnoreSourceEvidence {
-    let mut hash = RevisionHasher::new();
-    hash.write(contents.as_bytes());
+    let mut hash = FingerprintHasher::new();
+    hash.write(contents);
     IgnoreSourceEvidence {
         kind,
         location,
@@ -255,7 +256,7 @@ fn normalized_evidence_location(path: &Path, root: &Path) -> String {
     )
 }
 
-fn read_local_rule_file(path: &Path) -> io::Result<String> {
+fn read_local_rule_file(path: &Path) -> io::Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         return Err(io::Error::new(
@@ -263,5 +264,5 @@ fn read_local_rule_file(path: &Path) -> io::Result<String> {
             "ignore file is a symbolic link",
         ));
     }
-    fs::read_to_string(path)
+    fs::read(path)
 }

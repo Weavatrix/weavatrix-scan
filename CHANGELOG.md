@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+- Replace FNV content/revision hashing with streaming SHA-256 and persist
+  file-version evidence for safe incremental hash reuse.
+- Detect files changed between discovery and content completion, with typed
+  `ConcurrentModification` evidence or abort-policy errors.
+- Add `Scanner::scan_incremental`, cache statistics, same-size change
+  detection, and backward-compatible Serde defaults.
+- Parse ignore sources as raw bytes, cover non-UTF8/percent paths with
+  differential tests, and honor matching Git conditional includes.
+- Integrate adaptive parallel traversal into `Scanner`, add dynamic work below
+  narrow roots, and retain low-overhead lanes on broad trees.
+- Add first-touch, skewed, deep, bounded-handle, large-content, incremental,
+  and real-Weavatrix benchmark profiles.
+- Add multi-root `WalkBuilder`, native custom sorting, directory/entry
+  callbacks, contents-first ordering, and named scanner file types.
+
 ## 0.2.0 - 2026-07-24
 
 - Add a reusable repository matcher with explicit Git-global, Git-exclude,

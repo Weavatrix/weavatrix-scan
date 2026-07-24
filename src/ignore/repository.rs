@@ -116,7 +116,7 @@ impl RepositoryMatcher {
     ) -> Result<()> {
         if git_sources_enabled
             && options.ignore_policy.git_global
-            && let Some(path) = gitconfig_excludes_path()
+            && let Some(path) = gitconfig_excludes_path(repository_root)
         {
             self.load_static_source(
                 &path,

@@ -39,7 +39,7 @@ impl OverrideRules {
         let evidence = source_evidence(
             IgnoreSourceKind::Override,
             "<overrides>".to_owned(),
-            &contents,
+            contents.as_bytes(),
         );
         (
             Self {

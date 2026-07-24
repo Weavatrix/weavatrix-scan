@@ -23,11 +23,28 @@ fn scan_report_round_trips_through_json() {
     legacy_object.remove("ignore_sources");
     legacy_object.remove("termination");
     legacy_object.remove("portable");
+    legacy_object.remove("cache");
+    for file in legacy_object
+        .get_mut("files")
+        .and_then(serde_json::Value::as_array_mut)
+        .unwrap()
+    {
+        let file = file.as_object_mut().unwrap();
+        file.remove("version");
+        file.remove("binary_checked");
+    }
     let legacy: weavatrix_scan::ScanReport = serde_json::from_value(legacy).unwrap();
     assert!(legacy.complete);
     assert!(legacy.ignore_sources.is_empty());
     assert_eq!(legacy.termination, None);
     assert!(legacy.portable);
+    assert_eq!(legacy.cache, weavatrix_scan::ScanCacheStats::default());
+    assert!(
+        legacy
+            .files
+            .iter()
+            .all(|file| file.version == weavatrix_scan::FileVersion::default())
+    );
 
     let selected = Scanner::new(&fixture)
         .options(ScanOptions::default().selected_files_only())

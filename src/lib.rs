@@ -9,7 +9,10 @@ mod content;
 mod control;
 mod delta;
 mod error;
+mod file_types;
+mod file_version;
 mod glob;
+mod hash;
 mod hidden;
 mod ignore;
 mod parallel;
@@ -22,6 +25,7 @@ mod scan_finalize;
 mod scan_limits;
 mod scan_match;
 mod scanner;
+mod walk_builder;
 mod walk_iter;
 mod walk_platform;
 mod walk_types;
@@ -32,15 +36,17 @@ pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSk
 pub use control::CancellationToken;
 pub use delta::{DeltaQuality, ModifiedFile, RenamedFile, ScanDelta};
 pub use error::{Error, Result};
+pub use file_types::NamedFileTypes;
 pub use ignore::{IgnoreFile, RepositoryMatch, RepositoryMatcher};
 pub use parallel::{
     ParallelVisitReport, ParallelWalkReport, ParallelWalker, WalkControl, WalkEvent,
 };
 pub use report::{
-    IgnoreSourceEvidence, IgnoreSourceKind, ScanReport, ScanTermination, ScanWarning, ScannedFile,
-    SkipKind, SkippedEntry,
+    FileIdentity, FileVersion, IgnoreSourceEvidence, IgnoreSourceKind, ScanCacheStats, ScanReport,
+    ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
 };
 pub use scanner::{Scanner, scan_repository};
+pub use walk_builder::{MultiWalker, WalkBuilder};
 pub use walker::{
     ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, WalkSkipReason, Walker,
 };

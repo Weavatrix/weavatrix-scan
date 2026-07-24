@@ -1,7 +1,7 @@
 use super::repository::RepositoryMatcher;
 use super::{
     IgnoreError, IgnoreLayer, IgnoreRules, RuleSet, SourceRank, build_child_rules,
-    normalized_evidence_location, parse_file, source_evidence,
+    normalized_evidence_location, source_evidence,
 };
 use crate::error::{Error, Result};
 use crate::path::normalized_relative_path;
@@ -136,8 +136,8 @@ pub(super) fn add_rule_file(
     location: &str,
     case_insensitive: bool,
 ) -> (IgnoreRules, Vec<IgnoreError>, Vec<IgnoreSourceEvidence>) {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return (inherited.clone(), Vec::new(), Vec::new());
         }
@@ -155,7 +155,7 @@ pub(super) fn add_rule_file(
     };
     let mut rules = RuleSet::default();
     let mut errors = Vec::new();
-    parse_file(path, &text, case_insensitive, &mut rules, &mut errors);
+    super::parser::parse_file_bytes(path, &bytes, case_insensitive, &mut rules, &mut errors);
     let mut result = inherited.clone();
     if !rules.rules.is_empty() {
         let index = rank.index();
@@ -168,7 +168,7 @@ pub(super) fn add_rule_file(
     (
         result,
         errors,
-        vec![source_evidence(kind, location.to_owned(), &text)],
+        vec![source_evidence(kind, location.to_owned(), &bytes)],
     )
 }
 

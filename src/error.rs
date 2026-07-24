@@ -10,6 +10,7 @@ pub enum Error {
         source: std::io::Error,
     },
     InvalidRoot(PathBuf),
+    ConcurrentModification(PathBuf),
 }
 
 impl Error {
@@ -19,6 +20,10 @@ impl Error {
             source,
         }
     }
+
+    pub(crate) fn concurrent_modification(path: impl Into<PathBuf>) -> Self {
+        Self::ConcurrentModification(path.into())
+    }
 }
 
 impl fmt::Display for Error {
@@ -26,6 +31,9 @@ impl fmt::Display for Error {
         match self {
             Self::Io { path, source } => write!(formatter, "{}: {source}", path.display()),
             Self::InvalidRoot(path) => write!(formatter, "not a directory: {}", path.display()),
+            Self::ConcurrentModification(path) => {
+                write!(formatter, "file changed while scanning: {}", path.display())
+            }
         }
     }
 }
@@ -34,7 +42,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::InvalidRoot(_) => None,
+            Self::InvalidRoot(_) | Self::ConcurrentModification(_) => None,
         }
     }
 }

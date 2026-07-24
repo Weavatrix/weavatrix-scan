@@ -181,7 +181,7 @@ fn repository_and_source_helpers_cover_portable_edge_cases() {
     );
     assert_eq!(
         read_excludes_setting(&root.join("dotted-config")).as_deref(),
-        Some(Path::new("relative-ignore"))
+        Some(root.join("relative-ignore").as_path())
     );
     assert_eq!(expand_home("ordinary/path"), PathBuf::from("ordinary/path"));
     assert_eq!(
@@ -208,6 +208,44 @@ fn repository_and_source_helpers_cover_portable_edge_cases() {
     assert!(rules.layers.iter().all(Option::is_none));
     assert!(errors.is_empty());
     assert!(evidence.is_empty());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn git_config_honors_includes_and_repository_conditions() {
+    let root =
+        std::env::temp_dir().join(format!("weavatrix-ignore-includes-{}", std::process::id()));
+    let repository = root.join("repository");
+    let git_directory = repository.join(".git");
+    std::fs::create_dir_all(&git_directory).unwrap();
+    std::fs::write(git_directory.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        root.join("gitdir-config"),
+        "[core]\n  excludesFile = gitdir-ignore\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("branch-config"),
+        "[core]\n  excludesFile = branch-ignore\n",
+    )
+    .unwrap();
+
+    let git_pattern = git_directory.to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        root.join("config"),
+        format!(
+            "[includeIf \"gitdir:{git_pattern}/\"]\n  path = gitdir-config\n\
+             [includeIf \"onbranch:main\"]\n  path = branch-config\n"
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        read_excludes_setting_for(&root.join("config"), Some(&repository)).as_deref(),
+        Some(root.join("branch-ignore").as_path())
+    );
+    assert_eq!(read_excludes_setting_for(&root.join("config"), None), None);
 
     let _ = std::fs::remove_dir_all(root);
 }

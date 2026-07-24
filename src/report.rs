@@ -1,6 +1,24 @@
 use std::path::PathBuf;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    pub file_system: u64,
+    pub file: u64,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FileVersion {
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub modified_ns: Option<u128>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub changed_ns: Option<u128>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub identity: Option<FileIdentity>,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScannedFile {
     #[cfg_attr(feature = "serde", serde(with = "crate::path_serde"))]
@@ -8,6 +26,17 @@ pub struct ScannedFile {
     pub relative: String,
     pub bytes: u64,
     pub content_hash: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub version: FileVersion,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub binary_checked: bool,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanCacheStats {
+    pub reused_hashes: u64,
+    pub content_reads: u64,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -27,6 +56,7 @@ pub enum SkipKind {
     Symlink,
     SymlinkLoop,
     ScanLimit,
+    ConcurrentModification,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -94,6 +124,9 @@ pub struct ScanReport {
     /// False when selection depended on host-level configuration.
     #[cfg_attr(feature = "serde", serde(default = "default_portable"))]
     pub portable: bool,
+    /// Evidence of content work reused from an older persistent report.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cache: ScanCacheStats,
     #[cfg_attr(feature = "serde", serde(skip, default = "default_record_skipped"))]
     record_skipped: bool,
 }
@@ -131,6 +164,7 @@ impl ScanReport {
             complete: true,
             termination: None,
             portable: true,
+            cache: ScanCacheStats::default(),
             record_skipped,
         }
     }

@@ -1,4 +1,4 @@
-use crate::path::RevisionHasher;
+use crate::hash::FingerprintHasher;
 use crate::report::ScanReport;
 
 pub(crate) fn finalize_report(report: &mut ScanReport) {
@@ -28,7 +28,7 @@ pub(crate) fn finalize_report(report: &mut ScanReport) {
 }
 
 fn revision_for(report: &ScanReport) -> String {
-    let mut revision = RevisionHasher::new();
+    let mut revision = FingerprintHasher::new();
     for source in &report.ignore_sources {
         revision.write(format!("{:?}", source.kind).as_bytes());
         revision.write(&[0]);

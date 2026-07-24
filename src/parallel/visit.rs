@@ -1,15 +1,8 @@
-use super::collect::{DirectoryTask, collect_shallow};
-use super::visit_worker::{visit_lane, visit_serial};
-use super::{ParallelWalker, parallel_worker_count};
+use super::ParallelWalker;
+use super::dynamic;
+use super::visit_worker::visit_serial;
 use crate::control::CancellationToken;
-use crate::pool::ThreadPool;
-use crate::walker::{ErrorPolicy, WalkEntry, WalkError};
-use std::collections::HashSet;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-    mpsc,
-};
+use crate::walker::{WalkEntry, WalkError};
 
 /// A streaming event emitted from a parallel traversal worker.
 #[derive(Debug)]
@@ -79,94 +72,15 @@ impl ParallelWalker {
     {
         self.options = self.options.normalized();
         if self.options.follow_links {
-            return visit_serial(&self.root, self.options, cancellation, visitor);
+            visit_serial(&self.root, self.options, cancellation, visitor)
+        } else {
+            dynamic::visit(
+                &self.root,
+                self.options,
+                self.parallelism,
+                cancellation,
+                visitor,
+            )
         }
-        let mut shallow = collect_shallow(&self.root, self.options)?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let visitor = Arc::new(visitor);
-        let mut visited = 0_u64;
-        let mut errors = Vec::new();
-        let mut skipped = HashSet::new();
-        for entry in &shallow.entries {
-            if cancellation.is_cancelled() || stop.load(Ordering::Acquire) {
-                break;
-            }
-            visited = visited.saturating_add(1);
-            match visitor(WalkEvent::Entry(entry)) {
-                WalkControl::Skip if entry.depth() == 0 => {
-                    stop.store(true, Ordering::Release);
-                }
-                WalkControl::Skip if entry.is_dir() => {
-                    skipped.insert(entry.path().to_path_buf());
-                }
-                WalkControl::Continue | WalkControl::Skip => {}
-                WalkControl::Quit => stop.store(true, Ordering::Release),
-            }
-        }
-        shallow.tasks.retain(|task| !skipped.contains(&task.path));
-        for error in shallow.errors {
-            if cancellation.is_cancelled() || stop.load(Ordering::Acquire) {
-                break;
-            }
-            let control = visitor(WalkEvent::Error(&error));
-            let abort = self.options.error_policy == ErrorPolicy::Abort;
-            errors.push(error);
-            if abort || control == WalkControl::Quit {
-                stop.store(true, Ordering::Release);
-            }
-        }
-        if self.options.error_policy == ErrorPolicy::Abort && !errors.is_empty() {
-            return Err(errors.remove(0));
-        }
-        if shallow.tasks.is_empty() || cancellation.is_cancelled() || stop.load(Ordering::Acquire) {
-            return Ok(ParallelVisitReport {
-                visited,
-                errors,
-                quit: stop.load(Ordering::Acquire),
-                cancelled: cancellation.is_cancelled(),
-            });
-        }
-
-        let worker_count =
-            parallel_worker_count(self.parallelism, self.options.max_open, shallow.tasks.len());
-        let mut lanes = (0..worker_count)
-            .map(|_| Vec::<DirectoryTask>::new())
-            .collect::<Vec<_>>();
-        for (index, task) in shallow.tasks.into_iter().enumerate() {
-            lanes[index % worker_count].push(task);
-        }
-        let (sender, receiver) = mpsc::channel();
-        for (index, lane) in lanes.into_iter().enumerate() {
-            let sender = sender.clone();
-            let root = Arc::clone(&shallow.root);
-            let visitor = Arc::clone(&visitor);
-            let cancellation = cancellation.clone();
-            let stop = Arc::clone(&stop);
-            let options = self.options;
-            ThreadPool::global().execute(move || {
-                let report =
-                    visit_lane(lane, options, &root, &cancellation, &stop, visitor.as_ref());
-                let _ = sender.send((index, report));
-            });
-        }
-        drop(sender);
-        let mut completed = (0..worker_count).map(|_| None).collect::<Vec<_>>();
-        for (index, report) in receiver {
-            completed[index] = Some(report);
-        }
-        for report in completed {
-            let report = report.expect("every parallel visitor lane reports completion");
-            visited = visited.saturating_add(report.visited);
-            errors.extend(report.errors);
-        }
-        if self.options.error_policy == ErrorPolicy::Abort && !errors.is_empty() {
-            return Err(errors.remove(0));
-        }
-        Ok(ParallelVisitReport {
-            visited,
-            errors,
-            quit: stop.load(Ordering::Acquire),
-            cancelled: cancellation.is_cancelled(),
-        })
     }
 }

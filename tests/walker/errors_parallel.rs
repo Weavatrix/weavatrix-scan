@@ -1,4 +1,6 @@
 use super::*;
+use std::sync::{Arc, Mutex};
+use weavatrix_scan::{WalkControl, WalkEvent};
 
 #[test]
 fn continue_policy_yields_a_local_error_and_keeps_walking() {
@@ -118,4 +120,39 @@ fn parallel_report_order_does_not_depend_on_worker_completion() {
     }
 
     assert_eq!(top_level, descendant_groups);
+}
+
+#[test]
+fn dynamic_frontier_uses_multiple_workers_below_one_root_directory() {
+    if std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get) < 2 {
+        return;
+    }
+    let fixture = Fixture::new("weavatrix-parallel-dynamic");
+    for directory in 0..64 {
+        for file in 0..16 {
+            fixture.write(
+                &format!("single/module_{directory:02}/file_{file:02}.rs"),
+                "fn run() {}\n",
+            );
+        }
+    }
+    let workers = Arc::new(Mutex::new(BTreeSet::new()));
+    let visitor_workers = Arc::clone(&workers);
+    let report = ParallelWalker::new(&fixture.root)
+        .with_parallelism(4)
+        .visit(move |event| {
+            if matches!(event, WalkEvent::Entry(entry) if entry.is_file()) {
+                visitor_workers.lock().unwrap().insert(
+                    std::thread::current()
+                        .name()
+                        .unwrap_or("unnamed")
+                        .to_owned(),
+                );
+            }
+            WalkControl::Continue
+        })
+        .unwrap();
+
+    assert!(report.errors.is_empty());
+    assert!(workers.lock().unwrap().len() > 1);
 }

@@ -27,3 +27,5 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Compare Weavatrix Scan with ignore, walkdir, and jwalk
         run: cargo +stable bench --locked --bench compare_competitors
+      - name: Exercise skewed, deep, bounded, and incremental profiles
+        run: cargo +stable bench --locked --bench stress_profiles

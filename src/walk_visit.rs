@@ -1,3 +1,4 @@
+use crate::report::FileVersion;
 use crate::walk_platform::directory_info;
 use crate::walk_types::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason};
 use crate::walker::{PendingDirectory, Walker};
@@ -11,6 +12,7 @@ impl Walker {
         depth: usize,
         file_type: Option<FileType>,
         mut bytes: Option<u64>,
+        mut version: Option<FileVersion>,
     ) -> Result<WalkEntry, WalkError> {
         let file_type = entry_file_type(&path, depth, file_type)?;
         let is_symlink = file_type.is_symlink();
@@ -27,6 +29,7 @@ impl Walker {
             is_directory = metadata.is_dir();
             if self.options.collect_metadata && is_file {
                 bytes = Some(metadata.len());
+                version = Some(crate::file_version::from_metadata(&metadata));
             }
             Some(metadata)
         } else {
@@ -100,6 +103,7 @@ impl Walker {
                 path: path.clone(),
                 depth,
                 identity: directory_identity,
+                post_entry: None,
             });
         }
 
@@ -111,6 +115,7 @@ impl Walker {
             is_directory,
             is_symlink,
             bytes,
+            version,
             skip_reason,
         })
     }

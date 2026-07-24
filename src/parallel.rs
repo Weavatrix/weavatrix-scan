@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
 mod collect;
+pub(crate) mod dynamic;
 mod visit;
 mod visit_worker;
 
-use collect::{DirectoryTask, collect_lane, collect_serial, collect_shallow};
+use collect::{DirectoryTask, collect_lane, collect_serial, collect_shallow, expand_frontier};
 pub use visit::{ParallelVisitReport, WalkControl, WalkEvent};
 
 /// Collected output from a parallel filesystem walk.
@@ -17,15 +18,12 @@ pub struct ParallelWalkReport {
     pub errors: Vec<WalkError>,
 }
 
-/// A breadth-oriented parallel walker for wide repository trees.
+/// An adaptive parallel filesystem walker.
 ///
-/// Top-level directories are distributed across bounded serial walkers. This
-/// keeps the serial `Walker` API streaming and gives broad trees an explicit
-/// parallel mode without making scanner output order nondeterministic.
-/// Worker completion order does not affect report order. Callers that need a
-/// cross-filesystem stable manifest must still sort, as `Scanner` does.
-/// Link-following falls back to the serial walker so cycle detection has one
-/// authoritative seen set.
+/// Broad root frontiers use low-overhead lane traversal. Narrow trees use
+/// dynamic directory scheduling so work below one top-level directory can use
+/// every worker. Link-following falls back to the serial walker so cycle
+/// detection has one authoritative seen set.
 pub struct ParallelWalker {
     pub(super) root: PathBuf,
     pub(super) options: WalkOptions,
@@ -55,49 +53,57 @@ impl ParallelWalker {
         self
     }
 
-    /// Walks the tree using bounded top-level parallelism.
+    /// Walks the tree using bounded adaptive scheduling.
     ///
     /// # Errors
     ///
-    /// With `ErrorPolicy::Abort`, returns the first local traversal error.
-    /// With `ErrorPolicy::Continue`, local errors are collected in the report.
+    /// With `ErrorPolicy::Abort`, returns the first observed local traversal
+    /// error. With `ErrorPolicy::Continue`, local errors are collected.
     ///
     /// # Panics
     ///
-    /// Panics if an internal worker panics or shared traversal state is poisoned.
+    /// Panics if an internal worker panics or shared traversal state is
+    /// poisoned.
     pub fn walk(mut self) -> Result<ParallelWalkReport, WalkError> {
         self.options = self.options.normalized();
         if self.options.follow_links {
             return collect_serial(&self.root, self.options);
         }
-        let shallow = collect_shallow(&self.root, self.options)?;
+        let mut shallow = collect_shallow(&self.root, self.options)?;
+        if self.options.error_policy == ErrorPolicy::Abort && !shallow.errors.is_empty() {
+            return Err(shallow.errors.into_iter().next().expect("error exists"));
+        }
+        if !self.options.same_file_system && shallow.tasks.len() < 2 {
+            let target = requested_workers(self.parallelism, self.options.max_open);
+            shallow = expand_frontier(shallow, self.options, target);
+        }
+        if shallow.tasks.is_empty() {
+            return Ok(ParallelWalkReport {
+                entries: shallow.entries,
+                errors: shallow.errors,
+            });
+        }
+        self.walk_lanes(shallow)
+    }
+
+    fn walk_lanes(self, shallow: collect::ShallowWalk) -> Result<ParallelWalkReport, WalkError> {
         let mut entries = shallow.entries;
         let mut errors = shallow.errors;
-        let tasks = shallow.tasks;
-        let parallel_root = shallow.root;
-        if self.options.error_policy == ErrorPolicy::Abort && !errors.is_empty() {
-            return Err(errors.remove(0));
-        }
-        if tasks.is_empty() {
-            return Ok(ParallelWalkReport { entries, errors });
-        }
-
-        let pool = ThreadPool::global();
+        let task_count = shallow.tasks.len();
         let worker_count =
-            parallel_worker_count(self.parallelism, self.options.max_open, tasks.len());
-        let task_count = tasks.len();
+            parallel_worker_count(self.parallelism, self.options.max_open, task_count);
         let mut lanes = (0..worker_count)
             .map(|_| Vec::<DirectoryTask>::new())
             .collect::<Vec<_>>();
-        for (index, task) in tasks.into_iter().enumerate() {
+        for (index, task) in shallow.tasks.into_iter().enumerate() {
             lanes[index % worker_count].push(task);
         }
         let (sender, receiver) = mpsc::channel();
         for (index, lane) in lanes.into_iter().enumerate() {
             let sender = sender.clone();
-            let root = Arc::clone(&parallel_root);
+            let root = Arc::clone(&shallow.root);
             let options = self.options;
-            pool.execute(move || {
+            ThreadPool::global().execute(move || {
                 let report = collect_lane(lane, options, &root);
                 let _ = sender.send((index, report));
             });
@@ -107,18 +113,6 @@ impl ParallelWalker {
         for (index, report) in receiver {
             completed[index] = Some(report);
         }
-        let (additional_entries, additional_errors) =
-            completed
-                .iter()
-                .flatten()
-                .fold((0, 0), |(entries, errors), lane| {
-                    (
-                        entries + lane.report.entries.len(),
-                        errors + lane.report.errors.len(),
-                    )
-                });
-        entries.reserve(additional_entries);
-        errors.reserve(additional_errors);
         let mut lanes = completed
             .into_iter()
             .map(|lane| {
@@ -145,12 +139,21 @@ impl ParallelWalker {
     }
 }
 
-pub(super) fn parallel_worker_count(parallelism: usize, max_open: usize, tasks: usize) -> usize {
+fn parallel_worker_count(parallelism: usize, max_open: usize, tasks: usize) -> usize {
+    requested_workers(parallelism, max_open).min(tasks).max(1)
+}
+
+fn requested_workers(parallelism: usize, max_open: usize) -> usize {
     let available = ThreadPool::global().workers();
-    let requested = if parallelism == 0 {
-        available
+    if parallelism == 0 {
+        available.min(default_traversal_workers())
     } else {
-        parallelism
-    };
-    requested.min(max_open.max(1)).min(tasks).max(1)
+        parallelism.min(available)
+    }
+    .min(max_open.max(1))
+    .max(1)
+}
+
+const fn default_traversal_workers() -> usize {
+    if cfg!(windows) { 4 } else { 8 }
 }

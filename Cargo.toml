@@ -41,6 +41,10 @@ harness = false
 name = "real_repository"
 harness = false
 
+[[bench]]
+name = "stress_profiles"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 

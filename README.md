@@ -18,14 +18,16 @@ native volume and file identities.
 ## Why another repository walker?
 
 `walkdir` and `jwalk` are excellent traversal libraries. `ignore` adds mature
-Git-style filtering. Weavatrix Scan now exposes four deliberately separate
+Git-style filtering. Weavatrix Scan exposes five deliberately separate
 layers:
 
 - `Walker`: iterative, streaming, lossless low-level traversal;
+- `WalkBuilder`: multi-root traversal, native sorting, directory filters, and
+  contents-first ordering;
 - `Scanner`: ignore-aware deterministic manifest, hashes, revision, and typed
   evidence;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
-- `ParallelWalker`: bounded collected or streaming traversal for wide trees.
+- `ParallelWalker`: bounded adaptive traversal for broad or skewed trees.
 
 | Capability | weavatrix-scan | ignore | walkdir | jwalk |
 | --- | :---: | :---: | :---: | :---: |
@@ -33,14 +35,19 @@ layers:
 | Lossless native paths | Yes | Yes | Yes | Yes |
 | Continue after local errors | Configurable | Yes | Yes | Yes |
 | `max_depth` / bounded handles | Yes | Yes | Yes | Depth limit |
-| Same-filesystem boundary | Yes | No | Yes | No |
+| Same-filesystem boundary | Yes | Yes | Yes | No |
 | `.gitignore` hierarchy | Yes | Yes | No | No |
 | Custom ignore files | Yes | Yes | No | No |
 | Repository / Git-compatible ignore modes | Yes | Yes | No | No |
 | Override globs / source switches | Yes | Yes | No | Directory callback |
 | Reusable cached matcher | Yes | Yes | No | No |
+| Multi-root / custom native sort | Yes / Yes | Yes / Yes | No / Yes | No / Yes |
+| Directory callback / contents-first | Yes / Yes | Yes / Yes | Yes / Yes | Yes / No |
+| Named file types | Yes | Yes | No | No |
 | Stable normalized paths | Yes | No | No | Sorted traversal |
-| File sizes and content hashes | Yes | No | No | No |
+| File sizes and SHA-256 hashes | Yes | No | No | No |
+| Persistent incremental hash reuse | Yes | No | No | No |
+| Concurrent-mutation evidence | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
 | Typed manifest delta / rename evidence | Yes | No | No | No |
 | Binary and oversized-file policy | Yes | No | No | No |
@@ -142,7 +149,27 @@ The root is depth zero. After receiving a directory, callers can invoke
 followed by default; enabling `.with_follow_links(true)` keeps traversal inside
 the root and reports loops as typed skip reasons.
 
-`ParallelWalker` is a separate collected mode for wide directory frontiers:
+`WalkBuilder` adds flexible low-level policies without changing the minimal
+streaming `Walker`:
+
+```rust
+use weavatrix_scan::WalkBuilder;
+
+let entries = WalkBuilder::new("repo-a")
+    .add_root("repo-b")
+    .sort_by_file_name()
+    .filter_directories(|entry| entry.file_name() != "target")
+    .contents_first(true)
+    .build()
+    .collect::<Result<Vec<_>, _>>()?;
+# Ok::<(), weavatrix_scan::WalkError>(())
+```
+
+Custom sort callbacks receive native `OsStr` names, so sorting never requires
+lossy UTF-8 conversion. Directory filters run before descent.
+
+`ParallelWalker` adapts between low-overhead frontier lanes and dynamic
+scheduling below narrow top-level trees:
 
 ```rust
 use weavatrix_scan::ParallelWalker;
@@ -185,7 +212,8 @@ The same scanner supports three useful cost levels:
 | Metadata only | `.metadata_only()` | No | Complete | No |
 | Selected manifest | `.metadata_only().selected_files_only()` | No | Omitted | No |
 
-Content inspection uses available CPU parallelism by default. Set
+Traversal and content inspection use bounded available parallelism by default.
+Set
 `.with_parallelism(1)` for a serial run or pass a fixed worker count when a
 host application owns the wider scheduling policy.
 
@@ -198,15 +226,17 @@ host application owns the wider scheduling policy.
 - `skipped`: stable, sorted evidence for excluded entries;
 - `warnings`: non-fatal ignore-file and local I/O diagnostics;
 - `ignore_sources`: typed location and hash of every loaded selection input;
-- `revision`: FNV-1a digest over ignore inputs, selected paths, optional content
+- `revision`: SHA-256 digest over ignore inputs, selected paths, optional content
   hashes, portability, and partial-termination state;
 - `complete`: false when local errors made the evidence partial.
 - `termination`: typed reason for a bounded or cancelled partial scan;
 - `portable`: false when host-level Git configuration affected selection.
+- `cache`: content reads and strong hashes reused by an incremental scan.
 
 Each `ScannedFile` contains an absolute path, slash-normalized repository path,
-byte size, and optional content hash. Default hashes are deterministic FNV-1a
-digests intended for change detection, not cryptographic verification. Native
+byte size, optional `sha256:` content hash, and file-version evidence used to
+validate persistent cache reuse. The scanner compares size, timestamps, native
+file identity where available, and metadata before/after content reads. Native
 paths remain lossless in the walker and absolute `PathBuf`; invalid Unicode
 units in normalized manifest names are escaped (`%XX` on Unix, `%uXXXX` on
 Windows) instead of being replaced with the lossy Unicode replacement marker.
@@ -224,7 +254,7 @@ use weavatrix_scan::{DeltaQuality, Scanner};
 
 let previous = Scanner::new(".").scan()?;
 // Apply repository changes, then scan again.
-let current = Scanner::new(".").scan()?;
+let current = Scanner::new(".").scan_incremental(&previous)?;
 let delta = current.delta_from(&previous);
 
 assert!(matches!(
@@ -241,11 +271,14 @@ println!(
 # Ok::<(), weavatrix_scan::Error>(())
 ```
 
-Rename evidence is emitted only when the same content hash is unique in both
+Unchanged files reuse prior SHA-256 values without reopening their content.
+Reports from another root, legacy reports without version evidence, and files
+whose size/version changed are read normally. Rename evidence is emitted only
+when the same content hash is unique in both
 manifests; duplicate-content moves remain explicit add/remove pairs instead of
-being guessed. Metadata-only scans classify same-size files as unchanged with
-`DeltaQuality::Metadata`, so callers can decide whether to request content
-hashes. Partial scans always produce `DeltaQuality::Partial`.
+being guessed. Metadata-only deltas compare size plus available file-version
+evidence; callers that need content certainty should keep hashes enabled.
+Partial scans always produce `DeltaQuality::Partial`.
 
 Long-lived file watchers can keep a `RepositoryMatcher` and call `refresh()`
 after an ignore input changes. Refresh builds a replacement matcher first, so a
@@ -254,6 +287,7 @@ failure leaves the existing matcher usable.
 `SkipKind` distinguishes:
 
 - `Binary`
+- `ConcurrentModification`
 - `Extension`
 - `FileSystemBoundary`
 - `Hidden`
@@ -279,6 +313,7 @@ from "unreadable" or "outside the repository."
 | --- | --- | --- |
 | `max_file_bytes` | 1,500,000 | Reject oversized source candidates |
 | `extensions` | Empty | Empty accepts every extension |
+| `file_types` | Empty | Named reusable extension groups, combined with `extensions` |
 | `ignore_files` | `.gitignore`, `.ignore`, `.weavatrixignore` | Hierarchical local ignore files |
 | `ignore_policy` | Repository-only | Optional parents, `.git/info/exclude`, global Git and explicit files |
 | `override_rules` | Empty | Request-level include/exclude globs above ignore sources |
@@ -288,7 +323,7 @@ from "unreadable" or "outside the repository."
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
 | `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
-| `parallelism` | `0` | Content workers; zero uses available parallelism |
+| `parallelism` | `0` | Traversal/content workers; zero uses bounded available parallelism |
 | `limits.max_entries` | None | Bound examined filesystem entries |
 | `limits.max_total_bytes` | None | Deterministically bound selected content bytes |
 | `limits.timeout` | None | Stop traversal/content inspection after a duration |
@@ -337,7 +372,8 @@ The default scanner intentionally does not read global Git configuration,
 parent rules outside the scan root, or `.git/info/exclude`; repository-local
 selection therefore stays portable. `IgnorePolicy::git_compatible()` enables
 all three explicitly inside Git repositories, records their content hashes,
-and marks host-dependent reports non-portable. Local `.gitignore`, `.ignore`,
+honors unconditional and matching `includeIf` Git config includes, and marks
+host-dependent reports non-portable. Local `.gitignore`, `.ignore`,
 and custom sources can be toggled independently. Request-level override globs
 use `ignore::Override` semantics: ordinary patterns include and leading `!`
 patterns exclude. Explicit includes can opt paths back into standard-directory
@@ -346,8 +382,9 @@ and extension filtering, but never bypass size or binary safety checks.
 decision without requiring a full walk. Differential tests compare
 exact selected path sets against the
 `ignore` crate for anchored, nested, negated, wildcard, and character-class
-fixtures plus deterministic randomized rule sets. Stress cases cover deep
-trees, permission errors, non-UTF8 names, and followed symlink loops. The
+fixtures plus 64-seed deterministic randomized rule sets. Stress cases cover
+deep trees, permission errors, raw non-UTF8 ignore rules/names, percent escapes,
+and followed symlink loops. The
 differential suite and competitor crates are dev-only.
 
 ## Safety model
@@ -365,8 +402,9 @@ differential suite and competitor crates are dev-only.
 - supports entry, total-byte, timeout, and cooperative cancellation bounds;
 - forbids unsafe Rust.
 
-The scanner is read-only. Concurrent filesystem changes are surfaced as local
-warnings/skips under `Continue` or as the first error under `Abort`.
+The scanner is read-only. Concurrent filesystem changes between discovery and
+the final metadata check are surfaced as `ConcurrentModification` warnings and
+skips under `Continue`, or as the first error under `Abort`.
 
 ## Benchmarks
 
@@ -392,6 +430,13 @@ $env:WEAVATRIX_BENCH_ROOT = "C:\path\to\repository"
 cargo bench --locked --bench real_repository
 ```
 
+Run skewed, deep, first-touch, bounded-handle, large-content, and incremental
+profiles:
+
+```sh
+cargo bench --locked --bench stress_profiles
+```
+
 The synthetic comparison uses 6,000 source files across Rust, Go, and
 TypeScript in 80 sibling directories. It runs two warmups and 11 interleaved
 measured samples, then reports the median. Raw walkers must produce the same
@@ -403,35 +448,23 @@ Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 7.7 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 5.0 ms |
-| Raw paths | ignore | 6,004 | 10.1 ms |
-| Raw paths | walkdir | 6,004 | 9.5 ms |
-| Raw paths | jwalk | 6,004 | 7.8 ms |
-| Ignore-aware manifest | weavatrix `Scanner` | 6,001 | 20.5 ms |
-| Ignore-aware manifest | ignore | 6,001 | 24.1 ms |
-| Rich manifest | weavatrix `Scanner` | 6,000 | 92.8 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 11.7 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 8.6 ms |
+| Raw paths | ignore | 6,004 | 16.4 ms |
+| Raw paths | walkdir | 6,004 | 15.3 ms |
+| Raw paths | jwalk | 6,004 | 9.8 ms |
+| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 30.1 ms |
+| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 18.6 ms |
+| Ignore-aware manifest | ignore | 6,001 | 34.8 ms |
+| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 122.6 ms |
 
-This is the median of five independent output-equivalent Windows benchmark
-processes; each process itself reports the median of 11 interleaved samples
-after two warmups. `Walker` and `ParallelWalker` beat `walkdir` on this corpus.
-`ParallelWalker` is about 36% faster than `jwalk`, while the selected-manifest
-`Scanner` is about 15% faster than `ignore`. The comparable scanner row omits
-skip evidence on both sides. The rich row additionally records typed evidence,
-reads content, detects binaries, hashes sources, and computes a deterministic
-revision.
-
-One cross-platform GitHub-hosted-runner sample on the same commit:
-
-| Platform | `ParallelWalker` | jwalk | walkdir | `Scanner` | ignore |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Ubuntu | 7.2 ms | 7.8 ms | 9.7 ms | 21.1 ms | 22.8 ms |
-| Windows | 6.5 ms | 9.5 ms | 11.4 ms | 23.5 ms | 27.5 ms |
-| macOS | 5.6 ms | 7.1 ms | 8.0 ms | 15.2 ms | 20.5 ms |
-
-Absolute timings are not comparable between runner operating systems because
-their hardware differs. Within every row, Weavatrix produced identical output
-and led both the parallel-walker and ignore-aware comparisons.
+Each row is the median of 11 interleaved output-equivalent samples after two
+warmups. On this run `ParallelWalker` was 12.1% faster than `jwalk`; the
+parallel selected-manifest `Scanner` was 46.7% faster than `ignore`. The rich
+row additionally reads content, detects binaries, computes SHA-256 hashes,
+captures snapshot evidence, and records typed exclusions. Absolute timings
+vary by filesystem, cache, antivirus, CPU, and operating system; the benchmark
+workflow reruns the same checks on Ubuntu, Windows, and macOS.
 
 Source review explains the remaining differences:
 
@@ -441,8 +474,9 @@ Source review explains the remaining differences:
   matchers;
 - Weavatrix `Walker` streams iterative DFS, bounds live handles and buffers the
   oldest remaining frame only when `max_open` is reached;
-- Weavatrix `ParallelWalker` keeps round-robin directory balancing but restores
-  discovery-task order independently of worker completion;
+- Weavatrix `ParallelWalker` expands shallow frontiers for skewed roots, uses
+  bounded lanes for broad work, and keeps report order independent of worker
+  completion;
 - Weavatrix `Scanner` reuses inherited rules, indexes exact literals,
   specializes prefix/suffix globs, prefilters complex patterns, and sorts only
   the final report.
@@ -451,19 +485,14 @@ Exact-path real-repository sample:
 
 | Repository | Files | weavatrix-scan | ignore |
 | --- | ---: | ---: | ---: |
-| radiochron | 86 | 18.7 ms | 22.9 ms |
-| grpc-server | 30 | 5.4 ms | 5.6 ms |
-| bgp-speaker | 30 | 4.7 ms | 5.6 ms |
-| controller-rest-api | 1,085 | 38.3 ms | 38.4 ms |
-| frontend | 1,689 | 39.8 ms | 46.3 ms |
-| analytics | 361 | 40.6 ms | 40.4 ms |
-| automation | 1,670 | 22.6 ms | 22.2 ms |
+| Weavatrix Git checkout | 419 | 30.5 ms | 31.6 ms |
 
-Every real row first asserts the exact same sorted `(normalized path, bytes)`
-manifest. Weavatrix is faster on five repositories; the remaining two are
-within 2%, below the observed run-to-run variance. Timing varies by filesystem,
-cache, antivirus, and CPU, so treat the table as a reproducible sample rather
-than a universal constant.
+The real benchmark first asserts the exact same sorted
+`(normalized path, bytes)` manifest. The stress profile also measured a
+skewed raw tree at 4.4 ms (`ParallelWalker`), 3.3 ms (`jwalk`), and 4.6 ms
+(`walkdir`), while an unchanged 12 MiB SHA-256 manifest fell from 61.7 ms full
+scan to 0.9 ms with incremental hash reuse. Treat these as reproducible
+samples, not universal constants.
 
 ## Correctness checks
 
@@ -476,6 +505,9 @@ The test suite covers:
 - raw entry parity with `walkdir` and `jwalk`;
 - iterative deep trees, bounded handles, local error continuation, non-UTF8
   paths, and symlink loops;
+- concurrent mutation detection and same-size incremental changes;
+- multi-root walking, named file types, custom native sorting, directory
+  filtering, and contents-first ordering;
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
 - streaming parallel pruning and cancellation;

@@ -1,4 +1,5 @@
 use crate::control::CancellationToken;
+use crate::file_types::NamedFileTypes;
 use crate::walker::{ErrorPolicy, WalkOptions};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -7,6 +8,7 @@ use std::time::Duration;
 
 mod ignore_policy;
 mod limits;
+mod runtime;
 
 pub use ignore_policy::IgnorePolicy;
 pub use limits::ScanLimits;
@@ -44,6 +46,8 @@ pub enum EvidenceMode {
 pub struct ScanOptions {
     pub max_file_bytes: u64,
     pub extensions: BTreeSet<String>,
+    /// Reusable named file-extension groups, combined with `extensions`.
+    pub file_types: NamedFileTypes,
     pub ignore_files: Vec<String>,
     /// High-precedence include/exclude globs using `ignore::Override` syntax.
     pub override_rules: Vec<String>,
@@ -58,7 +62,8 @@ pub struct ScanOptions {
     pub detect_binary_files: bool,
     /// Record typed evidence for entries excluded by policy.
     pub evidence: EvidenceMode,
-    /// Content-inspection workers. Zero selects the available parallelism.
+    /// Traversal and content-inspection workers. Zero selects available
+    /// parallelism.
     pub parallelism: usize,
     /// Whole-scan resource bounds. All limits are disabled by default.
     pub limits: ScanLimits,
@@ -73,6 +78,7 @@ impl Default for ScanOptions {
         Self {
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             extensions: BTreeSet::new(),
+            file_types: NamedFileTypes::default(),
             ignore_files: DEFAULT_IGNORE_FILES
                 .iter()
                 .map(ToString::to_string)
@@ -104,6 +110,13 @@ impl ScanOptions {
             .into_iter()
             .map(|item| item.as_ref().trim_start_matches('.').to_ascii_lowercase())
             .collect();
+        self
+    }
+
+    /// Replaces named file-type definitions and selections.
+    #[must_use]
+    pub fn with_file_types(mut self, file_types: NamedFileTypes) -> Self {
+        self.file_types = file_types;
         self
     }
 
@@ -248,7 +261,10 @@ impl ScanOptions {
     }
 
     pub(crate) fn accepts_extension(&self, path: &Path) -> bool {
-        if self.extensions.is_empty() {
+        if self.extensions.is_empty() && !self.file_types.is_active() {
+            return true;
+        }
+        if self.file_types.accepts(path) {
             return true;
         }
         let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
@@ -267,29 +283,5 @@ impl ScanOptions {
         } else {
             self.extensions.contains(extension)
         }
-    }
-
-    pub(crate) fn worker_count(&self, file_count: usize) -> usize {
-        if file_count == 0 {
-            return 1;
-        }
-        let requested = if self.parallelism == 0 {
-            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-        } else {
-            self.parallelism
-        };
-        requested.min(file_count.div_ceil(128)).max(1)
-    }
-
-    pub(crate) const fn walk_options(&self) -> WalkOptions {
-        let mut options = self.walk;
-        options.min_depth = 0;
-        options
-    }
-
-    pub(crate) fn effective_min_depth(&self) -> usize {
-        self.walk.max_depth.map_or(self.walk.min_depth, |maximum| {
-            self.walk.min_depth.min(maximum)
-        })
     }
 }

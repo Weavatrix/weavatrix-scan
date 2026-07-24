@@ -1,0 +1,210 @@
+use super::visit::{ParallelVisitReport, WalkControl, WalkEvent};
+use crate::control::CancellationToken;
+use crate::pool::ThreadPool;
+use crate::walk_platform::FileSystemId;
+use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+
+mod worker;
+
+use worker::{worker, worker_count};
+
+struct DirectoryTask {
+    path: PathBuf,
+    depth: usize,
+}
+
+struct SharedState {
+    queue: VecDeque<DirectoryTask>,
+    active: usize,
+    stopped: bool,
+    quit: bool,
+    visited: u64,
+    errors: Vec<WalkError>,
+}
+
+struct Shared {
+    state: Mutex<SharedState>,
+    ready: Condvar,
+}
+
+struct TaskReport {
+    directories: Vec<DirectoryTask>,
+    errors: Vec<WalkError>,
+    visited: u64,
+    quit: bool,
+}
+
+pub(crate) struct BatchControl {
+    pub(crate) entries: Vec<WalkControl>,
+    pub(crate) quit: bool,
+}
+
+impl BatchControl {
+    pub(crate) fn continue_all(entries: usize) -> Self {
+        Self {
+            entries: vec![WalkControl::Continue; entries],
+            quit: false,
+        }
+    }
+}
+
+pub(super) fn visit<F>(
+    root: &Path,
+    options: WalkOptions,
+    parallelism: usize,
+    cancellation: &CancellationToken,
+    visitor: F,
+) -> Result<ParallelVisitReport, WalkError>
+where
+    F: for<'entry> Fn(WalkEvent<'entry>) -> WalkControl + Send + Sync + 'static,
+{
+    visit_batched(
+        root,
+        options,
+        parallelism,
+        cancellation,
+        move |entries, errors| {
+            let mut controls = Vec::with_capacity(entries.len());
+            let mut quit = false;
+            for entry in entries {
+                let control = visitor(WalkEvent::Entry(entry));
+                controls.push(control);
+                quit |= control == WalkControl::Quit;
+            }
+            for error in errors {
+                quit |= visitor(WalkEvent::Error(error)) == WalkControl::Quit;
+            }
+            BatchControl {
+                entries: controls,
+                quit,
+            }
+        },
+    )
+}
+
+pub(crate) fn visit_batched<F>(
+    root: &Path,
+    options: WalkOptions,
+    parallelism: usize,
+    cancellation: &CancellationToken,
+    visitor: F,
+) -> Result<ParallelVisitReport, WalkError>
+where
+    F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Send + Sync + 'static,
+{
+    run_batched(root, options, parallelism, cancellation, visitor)
+}
+
+fn run_batched<F>(
+    root: &Path,
+    options: WalkOptions,
+    parallelism: usize,
+    cancellation: &CancellationToken,
+    visitor: F,
+) -> Result<ParallelVisitReport, WalkError>
+where
+    F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Send + Sync + 'static,
+{
+    let (parallel_root, root_file_system, root_entry) = prepare_root(root, options)?;
+    let mut visited = 0_u64;
+    let mut root_control = WalkControl::Continue;
+    if !cancellation.is_cancelled() && root_entry.depth() >= options.min_depth {
+        visited = 1;
+        let decision = visitor(std::slice::from_ref(&root_entry), &[]);
+        root_control = decision
+            .entries
+            .first()
+            .copied()
+            .unwrap_or(WalkControl::Continue);
+        if decision.quit {
+            root_control = WalkControl::Quit;
+        }
+    }
+    let descend = !cancellation.is_cancelled()
+        && root_entry.skip_reason().is_none()
+        && root_control == WalkControl::Continue;
+    if !descend {
+        return Ok(ParallelVisitReport {
+            visited,
+            errors: Vec::new(),
+            quit: root_control == WalkControl::Quit,
+            cancelled: cancellation.is_cancelled(),
+        });
+    }
+
+    let shared = initial_state(&parallel_root, visited);
+    let visitor = Arc::new(visitor);
+    let cancellation = cancellation.clone();
+    let worker_count = worker_count(parallelism, options.max_open);
+    let (sender, receiver) = mpsc::channel();
+    for _ in 0..worker_count {
+        let shared = Arc::clone(&shared);
+        let visitor = Arc::clone(&visitor);
+        let root = Arc::clone(&parallel_root);
+        let cancellation = cancellation.clone();
+        let sender = sender.clone();
+        ThreadPool::global().execute(move || {
+            worker(
+                &shared,
+                &root,
+                root_file_system,
+                options,
+                &cancellation,
+                visitor.as_ref(),
+            );
+            let _ = sender.send(());
+        });
+    }
+    drop(sender);
+    for () in receiver {}
+
+    let shared = Arc::try_unwrap(shared)
+        .ok()
+        .expect("dynamic traversal workers released shared state");
+    let mut state = shared
+        .state
+        .into_inner()
+        .expect("dynamic traversal state is not poisoned");
+    if options.error_policy == ErrorPolicy::Abort && !state.errors.is_empty() {
+        return Err(state.errors.remove(0));
+    }
+    Ok(ParallelVisitReport {
+        visited: state.visited,
+        errors: state.errors,
+        quit: state.quit,
+        cancelled: cancellation.is_cancelled(),
+    })
+}
+
+fn prepare_root(
+    root: &Path,
+    options: WalkOptions,
+) -> Result<(Arc<PathBuf>, Option<FileSystemId>, WalkEntry), WalkError> {
+    let mut root_options = options;
+    root_options.min_depth = 0;
+    let mut walker = Walker::with_options(root, root_options)?;
+    let root_file_system = walker.root_file_system;
+    let parallel_root = Arc::clone(&walker.root);
+    let entry = walker.next().expect("a validated root yields one entry")?;
+    Ok((parallel_root, root_file_system, entry))
+}
+
+fn initial_state(root: &Arc<PathBuf>, visited: u64) -> Arc<Shared> {
+    Arc::new(Shared {
+        state: Mutex::new(SharedState {
+            queue: VecDeque::from([DirectoryTask {
+                path: root.as_ref().clone(),
+                depth: 0,
+            }]),
+            active: 0,
+            stopped: false,
+            quit: false,
+            visited,
+            errors: Vec::new(),
+        }),
+        ready: Condvar::new(),
+    })
+}

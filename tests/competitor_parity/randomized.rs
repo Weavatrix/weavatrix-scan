@@ -15,6 +15,12 @@ fn randomized_hierarchical_ignore_files_match_ignore_crate() {
         "name[0-9].txt",
         "escaped\\ name.txt",
         "generated/**",
+        "**/deep/**/drop-*.rs",
+        "\\#literal.rs",
+        "\\!literal.rs",
+        "trailing-space\\ ",
+        "question-?.[ch]",
+        "!nested/**/keep.rs",
     ];
     const LOCAL_PATTERNS: &[&str] = &[
         "local-?.rs",
@@ -25,7 +31,7 @@ fn randomized_hierarchical_ignore_files_match_ignore_crate() {
         "cache/",
     ];
 
-    for seed in 0..12_u64 {
+    for seed in 0..64_u64 {
         let fixture = support::Fixture::new(&format!("weavatrix-scan-random-ignore-{seed}"));
         for directory in ["", "src", "docs", "nested/a", "nested/b", "src/cache"] {
             for name in [
@@ -43,6 +49,10 @@ fn randomized_hierarchical_ignore_files_match_ignore_crate() {
                 "keep.generated.ts",
                 "drop.generated.ts",
                 "anchored.rs",
+                "#literal.rs",
+                "!literal.rs",
+                "keep.rs",
+                "question-a.c",
             ] {
                 let path = if directory.is_empty() {
                     name.to_owned()

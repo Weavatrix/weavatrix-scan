@@ -1,3 +1,4 @@
+use crate::report::FileVersion;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io;
@@ -184,6 +185,7 @@ pub struct WalkEntry {
     pub(crate) is_directory: bool,
     pub(crate) is_symlink: bool,
     pub(crate) bytes: Option<u64>,
+    pub(crate) version: Option<FileVersion>,
     pub(crate) skip_reason: Option<WalkSkipReason>,
 }
 
@@ -234,6 +236,12 @@ impl WalkEntry {
     #[must_use]
     pub const fn bytes(&self) -> Option<u64> {
         self.bytes
+    }
+
+    /// Snapshot evidence captured with file metadata, when requested.
+    #[must_use]
+    pub const fn version(&self) -> Option<FileVersion> {
+        self.version
     }
 
     #[must_use]

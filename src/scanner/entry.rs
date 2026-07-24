@@ -1,0 +1,177 @@
+use crate::config::ScanOptions;
+use crate::error::{Error, Result};
+use crate::file_version::from_metadata;
+use crate::ignore::{RepositoryMatch, RepositoryMatcher};
+use crate::path::normalized_relative_path;
+use crate::report::{ScanReport, ScannedFile, SkipKind};
+use crate::scan_match::skip_match;
+use crate::walker::{WalkEntry, WalkError, WalkOperation, WalkSkipReason};
+use std::fs;
+use std::path::Path;
+
+pub(super) fn process_entry(
+    entry: &WalkEntry,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+    matcher: &mut RepositoryMatcher,
+) -> Result<bool> {
+    let relative_path = entry.relative_path();
+    let relative = normalized_relative_path(relative_path);
+    if entry.depth() == 0 {
+        if let Some(reason) = entry.skip_reason() {
+            report.skip(".".to_owned(), skip_kind(reason), None);
+            return Ok(true);
+        }
+        matcher.prepare_directory(entry.path())?;
+        return Ok(false);
+    }
+    if entry.depth() < options.effective_min_depth() && !entry.is_dir() {
+        return Ok(false);
+    }
+    if entry.is_symlink() && !options.walk.follow_links {
+        report.skip(relative, SkipKind::Symlink, None);
+        return Ok(false);
+    }
+    if let Some(reason) = entry.skip_reason() {
+        report.skip(relative, skip_kind(reason), None);
+        return Ok(true);
+    }
+
+    if entry.is_dir() {
+        let parent = entry.path().parent().unwrap_or(entry.path());
+        let decision = matcher.matched_prepared(&relative, parent, entry.path(), true);
+        if skip_match(report, relative.clone(), decision) {
+            return Ok(true);
+        }
+        if decision != RepositoryMatch::OverrideInclude
+            && options.should_skip_directory(entry.file_name())
+        {
+            report.skip(relative, SkipKind::StandardDirectory, None);
+            return Ok(true);
+        }
+        matcher.prepare_directory(entry.path())?;
+        return Ok(false);
+    }
+    if !entry.is_file() {
+        return Ok(false);
+    }
+    let parent = entry.path().parent().unwrap_or(entry.path());
+    let decision = matcher.matched_prepared(&relative, parent, entry.path(), false);
+    if skip_match(report, relative.clone(), decision) {
+        return Ok(false);
+    }
+    process_file(
+        entry,
+        relative,
+        decision == RepositoryMatch::OverrideInclude,
+        options,
+        report,
+    )?;
+    Ok(false)
+}
+
+fn process_file(
+    entry: &WalkEntry,
+    relative: String,
+    override_include: bool,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+) -> Result<()> {
+    let path = entry.path();
+    if !override_include && !options.accepts_extension(path) {
+        report.skip(relative, SkipKind::Extension, None);
+        return Ok(());
+    }
+    let (bytes, version) = match (entry.bytes(), entry.version()) {
+        (Some(bytes), Some(version)) => (bytes, version),
+        _ => match fs::metadata(path) {
+            Ok(metadata) => (metadata.len(), from_metadata(&metadata)),
+            Err(source) => {
+                return record_local_io_error(
+                    path,
+                    relative,
+                    WalkOperation::ReadMetadata,
+                    source,
+                    options,
+                    report,
+                );
+            }
+        },
+    };
+    if bytes > options.max_file_bytes {
+        report.skip(
+            relative,
+            SkipKind::Oversized,
+            Some(format!("{bytes} bytes")),
+        );
+        return Ok(());
+    }
+    report.files.push(ScannedFile {
+        absolute: path.to_path_buf(),
+        relative,
+        bytes,
+        content_hash: None,
+        version,
+        binary_checked: false,
+    });
+    Ok(())
+}
+
+pub(super) fn record_walk_error(error: &WalkError, root: &Path, report: &mut ScanReport) {
+    let relative = error.path().strip_prefix(root).map_or_else(
+        |_| normalized_relative_path(error.path()),
+        normalized_relative_path,
+    );
+    let relative = if relative.is_empty() {
+        ".".to_owned()
+    } else {
+        relative
+    };
+    let message = format!(
+        "{}: {}",
+        operation_label(error.operation()),
+        error.io_error()
+    );
+    report.skip(relative.clone(), SkipKind::IoError, Some(message.clone()));
+    report.warn(Some(relative), message);
+}
+
+fn record_local_io_error(
+    path: &Path,
+    relative: String,
+    operation: WalkOperation,
+    source: std::io::Error,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+) -> Result<()> {
+    if options.walk.error_policy == crate::ErrorPolicy::Abort {
+        return Err(Error::io(path, source));
+    }
+    let message = format!("{}: {source}", operation_label(operation));
+    report.skip(relative.clone(), SkipKind::IoError, Some(message.clone()));
+    report.warn(Some(relative), message);
+    Ok(())
+}
+
+const fn skip_kind(reason: WalkSkipReason) -> SkipKind {
+    match reason {
+        WalkSkipReason::MaxDepth => SkipKind::MaxDepth,
+        WalkSkipReason::FileSystemBoundary => SkipKind::FileSystemBoundary,
+        WalkSkipReason::PathEscape => SkipKind::PathEscape,
+        WalkSkipReason::SymlinkLoop => SkipKind::SymlinkLoop,
+    }
+}
+
+const fn operation_label(operation: WalkOperation) -> &'static str {
+    match operation {
+        WalkOperation::Canonicalize => "canonicalize",
+        WalkOperation::ReadDirectory => "read directory",
+        WalkOperation::ReadEntry => "read entry",
+        WalkOperation::ReadMetadata => "read metadata",
+    }
+}
+
+pub(super) fn walker_error_into_scan_error(error: WalkError) -> Error {
+    let (path, source) = error.into_parts();
+    Error::io(path, source)
+}
