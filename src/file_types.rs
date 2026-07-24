@@ -5,8 +5,14 @@ use std::path::Path;
 /// Named, reusable groups of file-name or repository-relative glob patterns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NamedFileTypes {
-    definitions: BTreeMap<String, BTreeSet<String>>,
+    definitions: BTreeMap<String, BTreeSet<FileTypePattern>>,
     selected: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum FileTypePattern {
+    Extension(String),
+    Glob(String),
 }
 
 impl NamedFileTypes {
@@ -17,8 +23,7 @@ impl NamedFileTypes {
 
     /// Adds or replaces a named extension group.
     ///
-    /// Extensions are stored as file-name globs, so this remains compatible
-    /// with definitions created before arbitrary glob support was added.
+    /// Extensions retain a specialized allocation-free matching path.
     #[must_use]
     pub fn with_type<I, S>(mut self, name: impl Into<String>, extensions: I) -> Self
     where
@@ -29,7 +34,9 @@ impl NamedFileTypes {
             name.into(),
             extensions
                 .into_iter()
-                .map(|extension| format!("*.{}", normalized_extension(extension.as_ref())))
+                .map(|extension| {
+                    FileTypePattern::Extension(normalized_extension(extension.as_ref()))
+                })
                 .collect(),
         );
         self
@@ -50,7 +57,7 @@ impl NamedFileTypes {
             name.into(),
             patterns
                 .into_iter()
-                .map(|pattern| pattern.as_ref().replace('\\', "/"))
+                .map(|pattern| FileTypePattern::Glob(pattern.as_ref().replace('\\', "/")))
                 .collect(),
         );
         self
@@ -79,10 +86,17 @@ impl NamedFileTypes {
         let file_name = path.file_name().and_then(|value| value.to_str());
         self.selected.iter().any(|name| {
             self.definitions.get(name).is_some_and(|patterns| {
-                patterns.iter().any(|pattern| {
-                    if pattern.contains('/') {
+                patterns.iter().any(|pattern| match pattern {
+                    FileTypePattern::Extension(expected) => path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|actual| {
+                            actual == expected || actual.eq_ignore_ascii_case(expected)
+                        }),
+                    FileTypePattern::Glob(pattern) if pattern.contains('/') => {
                         glob::matches(pattern, relative)
-                    } else {
+                    }
+                    FileTypePattern::Glob(pattern) => {
                         file_name.is_some_and(|file_name| glob::matches(pattern, file_name))
                     }
                 })

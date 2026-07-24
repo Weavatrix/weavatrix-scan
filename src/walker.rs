@@ -3,7 +3,8 @@ use crate::walk_platform::{
     DirectoryIdentity, FileSystemId, PlatformDirectoryInfo, directory_info,
 };
 pub use crate::walk_types::{
-    ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, WalkSkipReason,
+    ErrorPolicy, RootSymlinkPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions,
+    WalkSkipReason,
 };
 use std::collections::{HashSet, VecDeque};
 use std::fs::{self, FileType};
@@ -103,6 +104,22 @@ impl Walker {
     ) -> Result<Self, WalkError> {
         let requested = root.as_ref();
         let options = options.normalized();
+        if options.root_symlink_policy == RootSymlinkPolicy::Reject {
+            let metadata = fs::symlink_metadata(requested).map_err(|source| {
+                WalkError::new(requested, 0, WalkOperation::ReadMetadata, source)
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(WalkError::new(
+                    requested,
+                    0,
+                    WalkOperation::ReadMetadata,
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "root symlink rejected by policy",
+                    ),
+                ));
+            }
+        }
         let canonical = if options.follow_links || options.same_file_system {
             requested.canonicalize().map_err(|source| {
                 WalkError::new(requested, 0, WalkOperation::Canonicalize, source)

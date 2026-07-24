@@ -58,10 +58,10 @@ layers:
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
 | Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
 | Deterministic backpressured scan sink | Yes | No | No | No |
-| Parallel pull iterator | No (callback API) | No (callback API) | No | Yes |
+| Parallel pull iterator | Yes (bounded) | No (callback API) | No | Yes |
 | Parallel multi-root scanner | Yes | Yes | No | No |
-| Stateful per-directory callback | No | No | No | Yes |
-| Separate root-symlink policy | No | No | Yes | No |
+| Stateful per-directory callback | Yes | No | No | Yes |
+| Separate root-symlink policy | Yes | No | Yes | No |
 | Cancellation and whole-scan budgets | Yes | Quit only | No | No |
 | Minimum depth / hidden policy | Yes / Yes | Yes / Yes | Yes / No | Yes / Yes |
 | Default runtime dependencies | 0 Unix / 1 Windows | Multiple | 2 platform helpers | Rayon stack |
@@ -69,12 +69,9 @@ layers:
 Use `Walker` when you only need paths. Use `Scanner` when downstream results
 must be reproducible and explainable.
 
-The remaining `No` cells are API-shape differences rather than scanner
-correctness gaps. `jwalk` uniquely offers a parallel pull iterator and mutable
-per-directory state, while `walkdir` exposes a separate root-symlink switch.
-Weavatrix currently uses a callback for parallel streaming and canonicalizes
-the configured root. These are candidates for later API work, but do not weaken
-deterministic manifests, ignore selection, or safety evidence.
+The remaining differences are API shape and workload focus rather than scanner
+correctness gaps. Weavatrix keeps deterministic manifest construction separate
+from raw parallel traversal and exposes both callback and bounded pull modes.
 
 ## Install
 
@@ -162,7 +159,9 @@ while let Some(item) = walker.next() {
 The root is depth zero. After receiving a directory, callers can invoke
 `skip_current_dir()` before requesting the next item. Symbolic links are not
 followed by default; enabling `.with_follow_links(true)` keeps traversal inside
-the root and reports loops as typed skip reasons.
+the root and reports loops as typed skip reasons. The root itself follows a
+separate `RootSymlinkPolicy`: `Follow` is the compatibility default and
+`Reject` prevents an explicitly supplied symlink root from being opened.
 
 `WalkBuilder` adds flexible low-level policies without changing the minimal
 streaming `Walker`:
@@ -182,6 +181,8 @@ let entries = WalkBuilder::new("repo-a")
 
 Custom sort callbacks receive native `OsStr` names, so sorting never requires
 lossy UTF-8 conversion. Directory filters run before descent.
+`filter_directories_stateful` accepts `FnMut`, serializes callback access, and
+keeps one captured state across every root in the builder.
 
 `ParallelWalker` adapts between low-overhead frontier lanes and dynamic
 scheduling below narrow top-level trees:
@@ -213,6 +214,19 @@ let summary = ParallelWalker::new(".").visit(|event| match event {
         WalkControl::Continue
     }
 })?;
+# Ok::<(), weavatrix_scan::WalkError>(())
+```
+
+Consumers that prefer pull semantics can use a bounded iterator. A full buffer
+applies backpressure to traversal workers, and dropping the iterator cancels and
+joins its coordinator:
+
+```rust
+use weavatrix_scan::ParallelWalker;
+
+for entry in ParallelWalker::new(".").into_iter_bounded(64) {
+    println!("{}", entry?.path().display());
+}
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
 
@@ -373,6 +387,12 @@ Long-lived file watchers can keep a `RepositoryMatcher` and call `refresh()`
 after an ignore input changes. Refresh builds a replacement matcher first, so a
 failure leaves the existing matcher usable.
 
+`WatcherEventAdapter` converts create/modify/remove/rename notifications from
+any watcher library into sorted relative `WatchPlan` invalidations. Events
+outside the root are rejected, while directory, ignore-source, and explicit
+rescan events request a full scan. `ScanCache::apply_watch_plan` removes only
+affected entries or clears the cache when selection may have changed.
+
 `SkipKind` distinguishes:
 
 - `Binary`
@@ -424,6 +444,7 @@ from "unreadable" or "outside the repository."
 | `walk.max_open` | `64` | Bound live directory handles/workers |
 | `walk.same_file_system` | `false` | Stop at filesystem boundaries when enabled |
 | `walk.follow_links` | `false` | Follow only in-root links and detect cycles |
+| `walk.root_symlink_policy` | `Follow` | Follow or reject the explicitly supplied root symlink |
 | `walk.error_policy` | `Continue` | Continue with partial typed evidence or abort |
 | `walk.collect_metadata` | `true` in `ScanOptions` | Reuse directory-entry metadata without reopening selected paths |
 
@@ -471,9 +492,10 @@ patterns exclude. Explicit includes can opt paths back into standard-directory
 and extension filtering, but never bypass size or binary safety checks.
 `RepositoryMatcher::matched` exposes the winning typed
 decision without requiring a full walk. Differential tests compare
-exact selected path sets against the
-`ignore` crate for anchored, nested, negated, wildcard, and character-class
-fixtures plus 64-seed deterministic randomized rule sets. Stress cases cover
+exact selected path sets against the `ignore` crate for anchored, nested,
+negated, wildcard, and character-class fixtures plus 96-seed deterministic
+randomized rule sets and direct comparison with `git check-ignore`. Stress
+cases cover
 deep trees, permission errors, raw non-UTF8 ignore rules/names, percent escapes,
 and followed symlink loops. The
 differential suite and competitor crates are dev-only.

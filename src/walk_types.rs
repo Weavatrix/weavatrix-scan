@@ -10,6 +10,15 @@ pub enum ErrorPolicy {
     Abort,
 }
 
+/// Controls whether the explicitly supplied root itself may be a symlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootSymlinkPolicy {
+    /// Resolve or traverse the requested root for backward compatibility.
+    Follow,
+    /// Reject a symlink at the final root path component.
+    Reject,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkOptions {
     pub min_depth: usize,
@@ -19,6 +28,7 @@ pub struct WalkOptions {
     pub follow_links: bool,
     pub collect_metadata: bool,
     pub error_policy: ErrorPolicy,
+    pub root_symlink_policy: RootSymlinkPolicy,
 }
 
 impl Default for WalkOptions {
@@ -31,6 +41,7 @@ impl Default for WalkOptions {
             follow_links: false,
             collect_metadata: false,
             error_policy: ErrorPolicy::Continue,
+            root_symlink_policy: RootSymlinkPolicy::Follow,
         }
     }
 }
@@ -75,6 +86,12 @@ impl WalkOptions {
     #[must_use]
     pub const fn with_error_policy(mut self, policy: ErrorPolicy) -> Self {
         self.error_policy = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_root_symlink_policy(mut self, policy: RootSymlinkPolicy) -> Self {
+        self.root_symlink_policy = policy;
         self
     }
 

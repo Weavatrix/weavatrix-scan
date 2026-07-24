@@ -30,6 +30,11 @@ All notable changes to this project are documented here.
   previous `ScanReport`.
 - Expand randomized differential coverage against both `ignore` and the real
   `git check-ignore` implementation.
+- Add explicit root-symlink follow/reject policy to walkers and scanners.
+- Add a bounded parallel pull iterator with cooperative cancellation on drop.
+- Add a stateful `FnMut` directory filter shared across `WalkBuilder` roots.
+- Add watcher-event coalescing into path-safe deterministic cache invalidation
+  or full-rescan plans.
 - Add multi-root `WalkBuilder`, native custom sorting, directory/entry
   callbacks, contents-first ordering, and named scanner file types.
 

@@ -40,6 +40,7 @@ mod walk_platform;
 mod walk_types;
 mod walk_visit;
 mod walker;
+mod watch;
 
 pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
 pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips};
@@ -50,7 +51,8 @@ pub use file_types::NamedFileTypes;
 pub use ignore::{IgnoreFile, RepositoryMatch, RepositoryMatcher};
 pub use multi_scanner::{MultiScanReport, MultiScanner};
 pub use parallel::{
-    ParallelVisitReport, ParallelWalkReport, ParallelWalker, WalkControl, WalkEvent,
+    ParallelVisitReport, ParallelWalkIter, ParallelWalkReport, ParallelWalker, WalkControl,
+    WalkEvent,
 };
 pub use portable_report::{
     PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
@@ -65,5 +67,7 @@ pub use scanner::{Scanner, scan_repository};
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
 pub use walk_builder::{MultiWalker, WalkBuilder};
 pub use walker::{
-    ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, WalkSkipReason, Walker,
+    ErrorPolicy, RootSymlinkPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions,
+    WalkSkipReason, Walker,
 };
+pub use watch::{WatchEvent, WatchEventKind, WatchPlan, WatcherEventAdapter};

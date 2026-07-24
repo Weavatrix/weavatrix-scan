@@ -5,10 +5,12 @@ use std::sync::{Arc, mpsc};
 
 mod collect;
 pub(crate) mod dynamic;
+mod pull;
 mod visit;
 mod visit_worker;
 
 use collect::{DirectoryTask, collect_lane, collect_serial, collect_shallow, expand_frontier};
+pub use pull::ParallelWalkIter;
 pub use visit::{ParallelVisitReport, WalkControl, WalkEvent};
 
 /// Collected output from a parallel filesystem walk.

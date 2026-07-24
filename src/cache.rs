@@ -78,6 +78,18 @@ impl ScanCache {
             .retain(|entry| !paths.contains(entry.relative.as_str()));
         before - self.entries.len()
     }
+
+    /// Applies a watcher plan, clearing everything when selection may change.
+    ///
+    /// Returns the number of entries removed.
+    pub fn apply_watch_plan(&mut self, plan: &crate::WatchPlan) -> usize {
+        if plan.full_rescan {
+            let removed = self.entries.len();
+            self.entries.clear();
+            return removed;
+        }
+        self.invalidate(plan.invalidated())
+    }
 }
 
 impl ScanReport {

@@ -2,7 +2,7 @@ use crate::walker::{WalkEntry, WalkError, WalkOptions, Walker};
 use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub(crate) type EntrySorter = Arc<dyn Fn(&OsStr, &OsStr) -> Ordering + Send + Sync + 'static>;
 pub(crate) type EntryFilter = Arc<dyn Fn(&WalkEntry) -> bool + Send + Sync + 'static>;
@@ -81,6 +81,26 @@ impl WalkBuilder {
         F: Fn(&WalkEntry) -> bool + Send + Sync + 'static,
     {
         self.filter = Some(Arc::new(move |entry| !entry.is_dir() || filter(entry)));
+        self
+    }
+
+    /// Invokes one mutable directory predicate across every configured root.
+    ///
+    /// The callback is serialized behind a mutex so captured state remains
+    /// coherent if builder internals gain concurrent root traversal later.
+    #[must_use]
+    pub fn filter_directories_stateful<F>(mut self, filter: F) -> Self
+    where
+        F: FnMut(&WalkEntry) -> bool + Send + 'static,
+    {
+        let filter = Mutex::new(filter);
+        self.filter = Some(Arc::new(move |entry| {
+            if !entry.is_dir() {
+                return true;
+            }
+            let mut filter = filter.lock().unwrap_or_else(PoisonError::into_inner);
+            filter(entry)
+        }));
         self
     }
 

@@ -6,14 +6,14 @@ use crate::ignore::RepositoryMatcher;
 use crate::parallel::WalkControl;
 use crate::parallel::dynamic::{self, BatchControl};
 use crate::report::ScanReport;
-use crate::scan_finalize::{RevisionBuilder, finalize_report, sort_report_evidence};
+use crate::scan_finalize::finalize_report;
 use crate::scan_limits::{ScanRuntime, apply_total_bytes_limit};
-use crate::scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
 use crate::walker::{ErrorPolicy, Walker};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 mod entry;
+mod stream;
 
 use entry::{process_entry, record_walk_error, walker_error_into_scan_error};
 
@@ -70,78 +70,6 @@ impl Scanner {
     pub fn scan_cached(self, cache: &ScanCache) -> Result<ScanReport> {
         scan_repository_with_options(&self.root, &self.options, Some(cache))
     }
-
-    /// Inspects and emits the deterministic manifest under synchronous
-    /// backpressure without retaining selected file records.
-    ///
-    /// The sink is invoked in normalized relative-path order. Returning
-    /// [`ScanSinkControl::Stop`] stops inspection and marks the stream summary
-    /// incomplete.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same errors as [`Self::scan`].
-    pub fn scan_into<S>(self, mut sink: S) -> Result<ScanStreamReport>
-    where
-        S: ScanSink,
-    {
-        let (mut report, runtime) = discover_repository_with_options(&self.root, &self.options)?;
-        sort_report_evidence(&mut report);
-        let files = std::mem::take(&mut report.files);
-        let mut revision = RevisionBuilder::new(&report);
-        let mut selected = 0_u64;
-        let mut emitted = 0_u64;
-        let mut stopped = false;
-        for file in files {
-            let inspected = inspect_files(vec![file], &self.options, runtime.started, None)?;
-            report.skipped.extend(inspected.skipped);
-            if !inspected.warnings.is_empty() {
-                report.complete = false;
-                report.warnings.extend(inspected.warnings);
-            }
-            report.cache.reused_hashes = report
-                .cache
-                .reused_hashes
-                .saturating_add(inspected.cache.reused_hashes);
-            report.cache.content_reads = report
-                .cache
-                .content_reads
-                .saturating_add(inspected.cache.content_reads);
-            if let Some(reason) = inspected.termination {
-                report.terminate(reason);
-            }
-            for file in inspected.files {
-                revision.push(&file);
-                selected = selected.saturating_add(1);
-                emitted = emitted.saturating_add(1);
-                if sink.on_file(&file) == ScanSinkControl::Stop {
-                    stopped = true;
-                    report.complete = false;
-                    break;
-                }
-            }
-            if stopped || report.termination.is_some() {
-                break;
-            }
-        }
-        sort_report_evidence(&mut report);
-        report.revision = revision.finish(&report);
-        report.finish_recording();
-        Ok(ScanStreamReport {
-            root: report.root,
-            selected,
-            emitted,
-            stopped,
-            skipped: report.skipped,
-            warnings: report.warnings,
-            ignore_sources: report.ignore_sources,
-            revision: report.revision,
-            complete: report.complete,
-            termination: report.termination,
-            portable: report.portable,
-            cache: report.cache,
-        })
-    }
 }
 
 /// Scans a repository with default options.
@@ -185,6 +113,18 @@ fn discover_repository_with_options(
     root: &Path,
     options: &ScanOptions,
 ) -> Result<(ScanReport, ScanRuntime)> {
+    if options.walk.root_symlink_policy == crate::RootSymlinkPolicy::Reject {
+        let metadata = std::fs::symlink_metadata(root).map_err(|source| Error::io(root, source))?;
+        if metadata.file_type().is_symlink() {
+            return Err(Error::io(
+                root,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "root symlink rejected by policy",
+                ),
+            ));
+        }
+    }
     let canonical = root
         .canonicalize()
         .map_err(|source| Error::io(root, source))?;
