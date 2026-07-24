@@ -4,6 +4,7 @@ use crate::pool::ThreadPool;
 use crate::walk_platform::FileSystemId;
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
 use std::collections::VecDeque;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
@@ -95,6 +96,9 @@ pub(crate) fn visit_batched<F>(
 where
     F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Send + Sync + 'static,
 {
+    if ThreadPool::is_worker_thread() {
+        return visit_batched_serial(root, options, cancellation, visitor);
+    }
     run_batched(root, options, parallelism, cancellation, visitor)
 }
 
@@ -108,6 +112,9 @@ pub(crate) fn stream_batched<F>(
 where
     F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool + Send + Sync + 'static,
 {
+    if ThreadPool::is_worker_thread() {
+        return stream_batched_serial(root, options, cancellation, visitor);
+    }
     let (parallel_root, root_file_system, root_entry) = prepare_root(root, options)?;
     let root_can_descend = root_entry.skip_reason().is_none();
     let root_visible = root_entry.depth() >= options.min_depth;
@@ -138,19 +145,34 @@ where
         let cancellation = cancellation.clone();
         let sender = sender.clone();
         ThreadPool::global().execute(move || {
-            stream_worker(
-                &shared,
-                &root,
-                root_file_system,
-                options,
-                &cancellation,
-                visitor.as_ref(),
-            );
-            let _ = sender.send(());
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                stream_worker(
+                    &shared,
+                    &root,
+                    root_file_system,
+                    options,
+                    &cancellation,
+                    visitor.as_ref(),
+                );
+            }));
+            if outcome.is_err() {
+                worker::abort_after_panic(&shared);
+            }
+            let _ = sender.send(outcome);
         });
     }
     drop(sender);
-    for () in receiver {}
+    let mut panic = None;
+    for outcome in receiver {
+        if let Err(payload) = outcome
+            && panic.is_none()
+        {
+            panic = Some(payload);
+        }
+    }
+    if let Some(payload) = panic {
+        resume_unwind(payload);
+    }
 
     let shared = Arc::try_unwrap(shared)
         .ok()
@@ -220,19 +242,34 @@ where
         let cancellation = cancellation.clone();
         let sender = sender.clone();
         ThreadPool::global().execute(move || {
-            worker(
-                &shared,
-                &root,
-                root_file_system,
-                options,
-                &cancellation,
-                visitor.as_ref(),
-            );
-            let _ = sender.send(());
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                worker(
+                    &shared,
+                    &root,
+                    root_file_system,
+                    options,
+                    &cancellation,
+                    visitor.as_ref(),
+                );
+            }));
+            if outcome.is_err() {
+                worker::abort_after_panic(&shared);
+            }
+            let _ = sender.send(outcome);
         });
     }
     drop(sender);
-    for () in receiver {}
+    let mut panic = None;
+    for outcome in receiver {
+        if let Err(payload) = outcome
+            && panic.is_none()
+        {
+            panic = Some(payload);
+        }
+    }
+    if let Some(payload) = panic {
+        resume_unwind(payload);
+    }
 
     let shared = Arc::try_unwrap(shared)
         .ok()
@@ -279,5 +316,97 @@ fn initial_state(root: &Arc<PathBuf>, visited: u64) -> Arc<Shared> {
             errors: Vec::new(),
         }),
         ready: Condvar::new(),
+    })
+}
+
+fn visit_batched_serial<F>(
+    root: &Path,
+    mut options: WalkOptions,
+    cancellation: &CancellationToken,
+    visitor: F,
+) -> Result<ParallelVisitReport, WalkError>
+where
+    F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl,
+{
+    let error_policy = options.error_policy;
+    options.error_policy = ErrorPolicy::Continue;
+    let mut walker = Walker::with_options(root, options)?;
+    let mut visited = 0_u64;
+    let mut errors = Vec::new();
+    let mut quit = false;
+    while !cancellation.is_cancelled() && !quit {
+        let Some(item) = walker.next() else {
+            break;
+        };
+        match item {
+            Ok(entry) => {
+                visited = visited.saturating_add(1);
+                let decision = visitor(std::slice::from_ref(&entry), &[]);
+                let control = decision
+                    .entries
+                    .first()
+                    .copied()
+                    .unwrap_or(WalkControl::Continue);
+                if control == WalkControl::Skip && entry.is_dir() {
+                    walker.skip_current_dir();
+                }
+                quit = decision.quit || control == WalkControl::Quit;
+            }
+            Err(error) => {
+                let decision = visitor(&[], std::slice::from_ref(&error));
+                errors.push(error);
+                if error_policy == ErrorPolicy::Abort {
+                    return Err(errors.remove(0));
+                }
+                quit = decision.quit;
+            }
+        }
+    }
+    Ok(ParallelVisitReport {
+        visited,
+        errors,
+        quit,
+        cancelled: cancellation.is_cancelled(),
+    })
+}
+
+fn stream_batched_serial<F>(
+    root: &Path,
+    mut options: WalkOptions,
+    cancellation: &CancellationToken,
+    visitor: F,
+) -> Result<ParallelVisitReport, WalkError>
+where
+    F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool,
+{
+    let error_policy = options.error_policy;
+    options.error_policy = ErrorPolicy::Continue;
+    let mut walker = Walker::with_options(root, options)?;
+    let mut visited = 0_u64;
+    let mut errors = Vec::new();
+    let mut quit = false;
+    while !cancellation.is_cancelled() && !quit {
+        let Some(item) = walker.next() else {
+            break;
+        };
+        match item {
+            Ok(entry) => {
+                visited = visited.saturating_add(1);
+                quit = !visitor(vec![entry], &[]);
+            }
+            Err(error) => {
+                quit = !visitor(Vec::new(), std::slice::from_ref(&error));
+                errors.push(error);
+                if error_policy == ErrorPolicy::Abort {
+                    return Err(errors.remove(0));
+                }
+            }
+        }
+    }
+    Ok(ParallelVisitReport {
+        visited,
+        errors,
+        quit,
+        cancelled: cancellation.is_cancelled(),
     })
 }

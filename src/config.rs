@@ -42,6 +42,15 @@ pub enum EvidenceMode {
     SelectedFiles,
 }
 
+/// Controls how persistent content hashes are validated before reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheValidationPolicy {
+    /// Trust stable size, timestamp and available native identity evidence.
+    Fast,
+    /// Read a whole-file 128-bit fingerprint before reusing the prior SHA-256.
+    Strict,
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ScanOptions {
@@ -76,6 +85,8 @@ pub struct ScanOptions {
     pub limits: ScanLimits,
     /// Optional cooperative cancellation signal.
     pub cancellation: Option<CancellationToken>,
+    /// Persistent hash validation policy.
+    pub cache_validation: CacheValidationPolicy,
     /// Low-level traversal policy.
     pub walk: WalkOptions,
 }
@@ -103,6 +114,7 @@ impl Default for ScanOptions {
             content_parallelism: None,
             limits: ScanLimits::default(),
             cancellation: None,
+            cache_validation: CacheValidationPolicy::Fast,
             walk: WalkOptions::default().with_metadata(true),
         }
     }
@@ -239,6 +251,12 @@ impl ScanOptions {
     #[must_use]
     pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
         self.cancellation = Some(cancellation);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_cache_validation(mut self, policy: CacheValidationPolicy) -> Self {
+        self.cache_validation = policy;
         self
     }
 

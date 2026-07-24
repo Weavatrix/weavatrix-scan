@@ -68,7 +68,7 @@ impl ParallelWalker {
     /// poisoned.
     pub fn walk(mut self) -> Result<ParallelWalkReport, WalkError> {
         self.options = self.options.normalized();
-        if self.options.follow_links {
+        if self.options.follow_links || ThreadPool::is_worker_thread() {
             return collect_serial(&self.root, self.options);
         }
         let mut shallow = collect_shallow(&self.root, self.options)?;

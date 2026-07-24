@@ -4,7 +4,7 @@ use crate::pool::ThreadPool;
 use crate::walk_platform::FileSystemId;
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 pub(super) fn worker<F>(
     shared: &Shared,
@@ -36,6 +36,14 @@ pub(super) fn stream_worker<F>(
         let report = stream_directory(task, root, root_file_system, options, cancellation, visitor);
         finish_task(shared, report, options.error_policy, cancellation);
     }
+}
+
+pub(super) fn abort_after_panic(shared: &Shared) {
+    let mut state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
+    state.active = state.active.saturating_sub(1);
+    state.stopped = true;
+    state.quit = true;
+    shared.ready.notify_all();
 }
 
 fn next_task(shared: &Shared, cancellation: &CancellationToken) -> Option<DirectoryTask> {

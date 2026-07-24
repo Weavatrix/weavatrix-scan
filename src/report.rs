@@ -26,6 +26,9 @@ pub struct ScannedFile {
     pub relative: String,
     pub bytes: u64,
     pub content_hash: Option<String>,
+    /// Whole-content validation fingerprint used only for strict cache reuse.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub content_fingerprint: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub version: FileVersion,
     #[cfg_attr(feature = "serde", serde(default))]
@@ -37,6 +40,9 @@ pub struct ScannedFile {
 pub struct ScanCacheStats {
     pub reused_hashes: u64,
     pub content_reads: u64,
+    /// Whole-file fingerprint reads used to validate cached SHA-256 values.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub fingerprint_reads: u64,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

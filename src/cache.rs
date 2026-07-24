@@ -2,7 +2,7 @@ use crate::report::{FileVersion, ScanReport};
 use std::path::{Path, PathBuf};
 
 /// Current on-disk format understood by [`ScanCache`].
-pub const SCAN_CACHE_FORMAT_VERSION: u32 = 1;
+pub const SCAN_CACHE_FORMAT_VERSION: u32 = 2;
 
 /// Compact reusable evidence for one content-hashed file.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -11,6 +11,8 @@ pub struct ScanCacheEntry {
     pub relative: String,
     pub bytes: u64,
     pub content_hash: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub content_fingerprint: String,
     pub version: FileVersion,
     pub binary_checked: bool,
 }
@@ -45,6 +47,7 @@ impl ScanCache {
                     relative: file.relative.clone(),
                     bytes: file.bytes,
                     content_hash,
+                    content_fingerprint: file.content_fingerprint.clone()?,
                     version: file.version,
                     binary_checked: file.binary_checked,
                 })

@@ -76,6 +76,49 @@ const ROUND_CONSTANTS: [u32; 64] = [
     0xc671_78f2,
 ];
 
+pub(crate) struct ContentFingerprint {
+    first: u64,
+    second: u64,
+    bytes: u64,
+}
+
+impl ContentFingerprint {
+    pub(crate) const fn new() -> Self {
+        Self {
+            first: 0xcbf2_9ce4_8422_2325,
+            second: 0x9e37_79b9_7f4a_7c15,
+            bytes: 0,
+        }
+    }
+
+    pub(crate) fn write(&mut self, input: &[u8]) {
+        for byte in input {
+            self.first ^= u64::from(*byte);
+            self.first = self.first.wrapping_mul(0x0000_0100_0000_01b3);
+            self.second ^= u64::from(*byte).wrapping_add(self.bytes);
+            self.second = self
+                .second
+                .rotate_left(13)
+                .wrapping_mul(0x9e37_79b1_85eb_ca87);
+            self.bytes = self.bytes.wrapping_add(1);
+        }
+    }
+
+    pub(crate) fn finish(self) -> String {
+        let first = mix64(self.first ^ self.bytes);
+        let second = mix64(self.second ^ self.bytes.rotate_left(29));
+        format!("fp128:{first:016x}{second:016x}")
+    }
+}
+
+const fn mix64(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 pub(crate) struct FingerprintHasher {
     state: [u32; 8],
     buffer: [u8; 64],
@@ -194,7 +237,7 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{FingerprintHasher, hash_bytes};
+    use super::{ContentFingerprint, FingerprintHasher, hash_bytes};
 
     #[test]
     fn matches_sha256_known_vectors_and_streaming() {
@@ -211,5 +254,22 @@ mod tests {
         streamed.write(b"b");
         streamed.write(b"c");
         assert_eq!(streamed.finish(), hash_bytes(b"abc"));
+    }
+
+    #[test]
+    fn whole_content_fingerprint_is_streaming_and_change_sensitive() {
+        let mut whole = ContentFingerprint::new();
+        whole.write(b"abcdef");
+        let mut streamed = ContentFingerprint::new();
+        streamed.write(b"ab");
+        streamed.write(b"cd");
+        streamed.write(b"ef");
+        assert_eq!(whole.finish(), streamed.finish());
+
+        let mut changed = ContentFingerprint::new();
+        changed.write(b"abcdeg");
+        let mut original = ContentFingerprint::new();
+        original.write(b"abcdef");
+        assert_ne!(original.finish(), changed.finish());
     }
 }

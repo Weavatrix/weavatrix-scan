@@ -123,6 +123,7 @@ fn scanned(absolute: std::path::PathBuf, relative: &str) -> ScannedFile {
         relative: relative.to_owned(),
         bytes: metadata.as_ref().map_or(0, std::fs::Metadata::len),
         content_hash: None,
+        content_fingerprint: None,
         version: metadata.as_ref().map_or_else(
             crate::FileVersion::default,
             crate::file_version::from_metadata,

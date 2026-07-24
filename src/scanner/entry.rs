@@ -111,6 +111,7 @@ fn process_file(
         relative,
         bytes,
         content_hash: None,
+        content_fingerprint: None,
         version,
         binary_checked: false,
     });

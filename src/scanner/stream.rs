@@ -41,6 +41,10 @@ impl Scanner {
                 .cache
                 .content_reads
                 .saturating_add(inspected.cache.content_reads);
+            report.cache.fingerprint_reads = report
+                .cache
+                .fingerprint_reads
+                .saturating_add(inspected.cache.fingerprint_reads);
             if let Some(reason) = inspected.termination {
                 report.terminate(reason);
             }

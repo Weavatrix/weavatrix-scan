@@ -235,6 +235,11 @@ Larger bounded buffers improve throughput without changing the memory bound.
 Very small capacities are useful when minimum buffered state matters more than
 raw traversal speed.
 
+Parallel callbacks may start another walk using the same internal pool. Such
+reentrant walks fall back to the iterative serial engine instead of waiting on
+workers that they already occupy. A callback panic stops and wakes the dynamic
+scheduler, is resumed on the caller, and leaves the pool reusable.
+
 ## Scan modes
 
 The same scanner supports three useful cost levels:
@@ -300,12 +305,14 @@ assert_eq!(summary.selected, summary.emitted);
 - `complete`: false when local errors made the evidence partial.
 - `termination`: typed reason for a bounded or cancelled partial scan;
 - `portable`: false when host-level Git configuration affected selection.
-- `cache`: content reads and strong hashes reused by an incremental scan.
+- `cache`: content reads, strict-validation fingerprint reads, and strong hashes
+  reused by an incremental scan.
 
 Each `ScannedFile` contains an absolute path, slash-normalized repository path,
-byte size, optional `sha256:` content hash, and file-version evidence used to
-validate persistent cache reuse. The scanner compares size, timestamps, native
-file identity where available, and metadata before/after content reads. Native
+byte size, optional `sha256:` content hash, whole-content cache fingerprint, and
+file-version evidence used to validate persistent cache reuse. The scanner
+compares size, timestamps, native file identity where available, and metadata
+before/after content reads. Native
 paths remain lossless in the walker and absolute `PathBuf`; invalid Unicode
 units in normalized manifest names are escaped (`%XX` on Unix, `%uXXXX` on
 Windows) instead of being replaced with the lossy Unicode replacement marker.
@@ -386,7 +393,22 @@ Partial scans always produce `DeltaQuality::Partial`.
 Persistent consumers should store `ScanReport::to_cache()` instead of the full
 report and pass it to `Scanner::scan_cached`. `ScanCache` has an explicit format
 version and contains only the canonical root plus relative path, size, version,
-hash, and binary-check evidence for reusable files.
+hash, whole-content fingerprint, and binary-check evidence for reusable files.
+`CacheValidationPolicy::Fast` trusts matching file-version evidence.
+`CacheValidationPolicy::Strict` additionally reads a compact whole-content
+fingerprint before reusing the cached SHA-256, protecting coarse-timestamp and
+network filesystems from same-size, same-timestamp changes.
+
+```rust
+use weavatrix_scan::{CacheValidationPolicy, ScanOptions, Scanner};
+
+let options = ScanOptions::default()
+    .with_cache_validation(CacheValidationPolicy::Strict);
+let first = Scanner::with_options(".", options.clone()).scan()?;
+let second = Scanner::with_options(".", options).scan_cached(&first.to_cache())?;
+assert_eq!(first.revision, second.revision);
+# Ok::<(), weavatrix_scan::Error>(())
+```
 
 Long-lived file watchers can keep a `RepositoryMatcher` and call `refresh()`
 after an ignore input changes. Refresh builds a replacement matcher first, so a
@@ -435,6 +457,7 @@ from "unreadable" or "outside the repository."
 | `skip_hidden` | `false` | Skip dot-prefixed and Windows-hidden entries unless included |
 | `standard_skips` | Enabled | Skip generated/vendor directories |
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
+| `cache_validation` | `Fast` | Trust file-version evidence, or verify a whole-content fingerprint in `Strict` mode |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
 | `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
 | `parallelism` | `0` | Traversal/content workers; zero uses bounded available parallelism |
@@ -638,11 +661,13 @@ The test suite covers:
 - iterative deep trees, bounded handles, local error continuation, non-UTF8
   paths, and symlink loops;
 - concurrent mutation detection and same-size incremental changes;
+- strict cache validation under simulated size/timestamp collisions;
 - multi-root walking, named file types, custom native sorting, directory
   filtering, and contents-first ordering;
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
 - streaming parallel pruning and cancellation;
+- reentrant parallel callbacks, panic propagation, and pool reuse;
 - manifest delta evidence and live matcher refresh;
 - optional Serde support.
 

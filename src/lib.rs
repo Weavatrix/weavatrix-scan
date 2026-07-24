@@ -43,7 +43,9 @@ mod walker;
 mod watch;
 
 pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
-pub use config::{EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips};
+pub use config::{
+    CacheValidationPolicy, EvidenceMode, IgnorePolicy, ScanLimits, ScanOptions, StandardSkips,
+};
 pub use control::CancellationToken;
 pub use delta::{DeltaQuality, ModifiedFile, RenamedFile, ScanDelta};
 pub use error::{Error, Result};

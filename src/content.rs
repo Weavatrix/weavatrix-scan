@@ -1,5 +1,5 @@
 use crate::cache::{ScanCache, ScanCacheEntry};
-use crate::config::{EvidenceMode, ScanOptions};
+use crate::config::{CacheValidationPolicy, EvidenceMode, ScanOptions};
 use crate::error::{Error, Result};
 use crate::file_version::reusable;
 use crate::report::{
@@ -86,6 +86,10 @@ pub(crate) fn inspect_files(
                 .cache
                 .content_reads
                 .saturating_add(chunk.cache.content_reads);
+            inspected.cache.fingerprint_reads = inspected
+                .cache
+                .fingerprint_reads
+                .saturating_add(chunk.cache.fingerprint_reads);
         }
         Ok(inspected)
     })
@@ -112,10 +116,39 @@ fn inspect_chunk(
             continue;
         }
         let cached = cache.get(file.relative.as_str()).copied();
-        if reuse_cached(&mut file, options, cached) {
-            inspected.cache.reused_hashes = inspected.cache.reused_hashes.saturating_add(1);
-            inspected.files.push(file);
-            continue;
+        if reusable_candidate(&file, options, cached) {
+            let cached = cached.expect("reusable candidate has cache evidence");
+            if options.cache_validation == CacheValidationPolicy::Fast {
+                apply_cached(&mut file, cached);
+                inspected.cache.reused_hashes = inspected.cache.reused_hashes.saturating_add(1);
+                inspected.files.push(file);
+                continue;
+            }
+            inspected.cache.content_reads = inspected.cache.content_reads.saturating_add(1);
+            inspected.cache.fingerprint_reads = inspected.cache.fingerprint_reads.saturating_add(1);
+            match inspect::validate_cached(&mut file, &cached.content_fingerprint) {
+                Ok(inspect::CachedValidation::Match) => {
+                    apply_cached(&mut file, cached);
+                    inspected.cache.reused_hashes = inspected.cache.reused_hashes.saturating_add(1);
+                    inspected.files.push(file);
+                    continue;
+                }
+                Ok(inspect::CachedValidation::Changed) => {}
+                Ok(inspect::CachedValidation::Concurrent) => {
+                    record_concurrent_modification(&mut inspected, file.relative, options)?;
+                    continue;
+                }
+                Err(source) => {
+                    record_io_error(
+                        &mut inspected,
+                        &file,
+                        "validate cached content",
+                        source,
+                        options,
+                    )?;
+                    continue;
+                }
+            }
         }
         inspected.cache.content_reads = inspected.cache.content_reads.saturating_add(1);
         let error_file = file.clone();
@@ -141,8 +174,8 @@ fn inspect_chunk(
     Ok(inspected)
 }
 
-fn reuse_cached(
-    current: &mut ScannedFile,
+fn reusable_candidate(
+    current: &ScannedFile,
     options: &ScanOptions,
     previous: Option<&ScanCacheEntry>,
 ) -> bool {
@@ -158,9 +191,13 @@ fn reuse_cached(
     {
         return false;
     }
-    current.content_hash = Some(previous.content_hash.clone());
-    current.binary_checked = previous.binary_checked;
     true
+}
+
+fn apply_cached(current: &mut ScannedFile, previous: &ScanCacheEntry) {
+    current.content_hash = Some(previous.content_hash.clone());
+    current.content_fingerprint = Some(previous.content_fingerprint.clone());
+    current.binary_checked = previous.binary_checked;
 }
 
 #[derive(Default)]

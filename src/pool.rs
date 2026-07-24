@@ -1,7 +1,14 @@
+#![allow(clippy::missing_const_for_thread_local)]
+
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
+
+thread_local! {
+    static IS_POOL_WORKER: Cell<bool> = const { Cell::new(false) };
+}
 
 pub(crate) struct ThreadPool {
     queue: Arc<JobQueue>,
@@ -21,6 +28,10 @@ impl ThreadPool {
 
     pub(crate) const fn workers(&self) -> usize {
         self.workers
+    }
+
+    pub(crate) fn is_worker_thread() -> bool {
+        IS_POOL_WORKER.get()
     }
 
     pub(crate) fn execute(&self, job: impl FnOnce() + Send + 'static) {
@@ -50,6 +61,7 @@ impl ThreadPool {
 }
 
 fn worker_loop(queue: &JobQueue) {
+    IS_POOL_WORKER.set(true);
     loop {
         let job = {
             let mut jobs = queue
