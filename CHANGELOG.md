@@ -2,6 +2,92 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+## 0.3.0 - 2026-07-24
+
+- Enable `notify`'s native macOS backend, identify redirected Unix stdout from
+  a safely duplicated descriptor, and keep raw non-UTF8 ignore coverage
+  separate from UTF-8-only reference-matcher differential checks.
+- Add `Scanner::visit_content`, a bounded parallel selected-content pipeline
+  with worker-local state, borrowed byte chunks, single-pass hash/binary
+  evidence, stable root/path identity, `SkipFile`/global `Quit`, selected
+  runtimes, and reentrant fallback.
+- Add `MultiScanner::{visit_content, visit_content_streaming}` with root-index
+  tagging, shared cancellation, globally bounded execution, and insertion-order
+  reports.
+- Add traversal-free `Scanner::{visit_changed_content,
+  visit_changed_content_streaming}` for safe file-only watcher plans, including
+  typed full-rescan fallback and removed-path output.
+- Add `ContentVisitMode::Streaming`, which keeps byte/hash/binary evidence while
+  omitting selected-file retention and revision computation.
+- Reuse one 64 KiB content buffer per worker instead of allocating one for
+  every selected file.
+- Add `ContentValidationPolicy::{Fast, Strict}` and consolidate Windows
+  by-handle size/version checks into one safe `winapi-util` query per
+  checkpoint.
+- Add direct parallel multi-root streaming callbacks with root-index tagging,
+  shared `Skip`/`Quit`/cancellation semantics, selected-runtime support, and
+  deterministic per-root reports.
+- Add `ParallelRuntime` with process-global, fallibly created dedicated, and
+  application-owned executors, external busy-timeout propagation, typed
+  worker-submission failures, and reentrant callback safety across walker,
+  pull, scanner, and multi-root APIs.
+- Add parallel ordered `StatefulWalkBuilder` execution: complete directory
+  batches run on workers, callback-mutated state propagates to children, entry
+  state and pruning are preserved, and bounded output remains strict DFS.
+- Add `CompactScanReport` and direct `Scanner::scan_compact` discovery with one
+  retained root path and optional boxed rich evidence, avoiding absolute-path
+  and unused version/hash slots per metadata-only entry.
+- Correct and expand the competitor matrix with workload-specific winners,
+  million-file time/memory evidence, and explicit remaining API gaps.
+- Add redirected-stdout protection to every `ParallelWalker` output mode and
+  parallel multi-root traversal.
+- Add fallible unordered and ordered parallel pull startup APIs.
+- Add a reproducible large-scale profile covering raw streaming,
+  collected traversal, ignore-aware metadata manifests, rich SHA-256 scans,
+  ripgrep, exact `ignore` manifest verification, and peak working-set
+  measurements up to 1,000,000 files.
+- Add a plain-entry traversal fast path and consuming `WalkEntry::into_path`
+  API, closing the measured deep-tree raw-walk gap without weakening typed
+  errors or traversal limits.
+- Expand built-in file types to 265 named definitions and 678 patterns, a
+  tested strict superset of `ignore` 0.4.31, with deterministic catalog
+  introspection through `len()` and `names()`.
+- Replace FNV content/revision hashing with streaming SHA-256 and persist
+  file-version evidence for safe incremental hash reuse.
+- Detect files changed between discovery and content completion, with typed
+  `ConcurrentModification` evidence or abort-policy errors.
+- Add `Scanner::scan_incremental`, cache statistics, same-size change
+  detection, and backward-compatible Serde defaults.
+- Parse ignore sources as raw bytes, cover non-UTF8/percent paths with
+  differential tests, and honor matching Git conditional includes.
+- Integrate adaptive parallel traversal into `Scanner`, add dynamic work below
+  narrow roots, and retain low-overhead lanes on broad trees.
+- Add first-touch, skewed, deep, bounded-handle, large-content, incremental,
+  small-tree, and privacy-safe real-repository benchmark profiles.
+- Raise the Windows collected-walker ceiling while bounding shallow frontier
+  expansion, improving broad and skewed traversal without a small-tree penalty.
+- Add `PortableScanReport` with host-path, file-identity, and free-form
+  diagnostic redaction plus a root-independent portable revision.
+- Add `SnapshotContentProvider` with path-scope validation, bounded reads,
+  before/after file-version checks, and optional SHA-256 verification.
+- Add ordered parallel `MultiScanner` reports and deterministic,
+  backpressured `Scanner::scan_into` content emission.
+- Add repository-relative glob definitions for named file types and separate
+  traversal/content worker budgets.
+- Add versioned compact `ScanCache` persistence instead of requiring a full
+  previous `ScanReport`.
+- Expand randomized differential coverage against both `ignore` and the real
+  `git check-ignore` implementation.
+- Add explicit root-symlink follow/reject policy to walkers and scanners.
+- Add a bounded parallel pull iterator with cooperative cancellation on drop.
+- Add a stateful `FnMut` directory filter shared across `WalkBuilder` roots.
+- Add watcher-event coalescing into path-safe deterministic cache invalidation
+  or full-rescan plans.
+- Add multi-root `WalkBuilder`, native custom sorting, directory/entry
+  callbacks, contents-first ordering, and named scanner file types.
+
 ## 0.2.0 - 2026-07-24
 
 - Add a reusable repository matcher with explicit Git-global, Git-exclude,

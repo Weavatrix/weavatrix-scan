@@ -1,3 +1,4 @@
+use crate::report::FileVersion;
 use crate::walk_platform::directory_info;
 use crate::walk_types::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason};
 use crate::walker::{PendingDirectory, Walker};
@@ -5,12 +6,46 @@ use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
 
 impl Walker {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(crate) fn visit_plain(
+        &mut self,
+        path: PathBuf,
+        depth: usize,
+        file_type: FileType,
+    ) -> WalkEntry {
+        let is_symlink = file_type.is_symlink();
+        let is_file = !is_symlink && file_type.is_file();
+        let is_directory = !is_symlink && file_type.is_dir();
+        if is_directory {
+            self.pending_directory = Some(PendingDirectory {
+                path: path.clone(),
+                depth,
+                identity: None,
+                post_entry: None,
+            });
+        }
+        WalkEntry {
+            root_components: self.root_components,
+            path,
+            depth,
+            is_file,
+            is_directory,
+            is_symlink,
+            bytes: None,
+            version: None,
+            directory_identity: None,
+            skip_reason: None,
+        }
+    }
+
     pub(crate) fn visit(
         &mut self,
         path: PathBuf,
         depth: usize,
         file_type: Option<FileType>,
         mut bytes: Option<u64>,
+        mut version: Option<FileVersion>,
     ) -> Result<WalkEntry, WalkError> {
         let file_type = entry_file_type(&path, depth, file_type)?;
         let is_symlink = file_type.is_symlink();
@@ -27,6 +62,7 @@ impl Walker {
             is_directory = metadata.is_dir();
             if self.options.collect_metadata && is_file {
                 bytes = Some(metadata.len());
+                version = Some(crate::file_version::from_metadata(&metadata));
             }
             Some(metadata)
         } else {
@@ -100,6 +136,7 @@ impl Walker {
                 path: path.clone(),
                 depth,
                 identity: directory_identity,
+                post_entry: None,
             });
         }
 
@@ -111,6 +148,8 @@ impl Walker {
             is_directory,
             is_symlink,
             bytes,
+            version,
+            directory_identity,
             skip_reason,
         })
     }

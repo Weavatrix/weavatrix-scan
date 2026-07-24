@@ -23,11 +23,28 @@ fn scan_report_round_trips_through_json() {
     legacy_object.remove("ignore_sources");
     legacy_object.remove("termination");
     legacy_object.remove("portable");
+    legacy_object.remove("cache");
+    for file in legacy_object
+        .get_mut("files")
+        .and_then(serde_json::Value::as_array_mut)
+        .unwrap()
+    {
+        let file = file.as_object_mut().unwrap();
+        file.remove("version");
+        file.remove("binary_checked");
+    }
     let legacy: weavatrix_scan::ScanReport = serde_json::from_value(legacy).unwrap();
     assert!(legacy.complete);
     assert!(legacy.ignore_sources.is_empty());
     assert_eq!(legacy.termination, None);
     assert!(legacy.portable);
+    assert_eq!(legacy.cache, weavatrix_scan::ScanCacheStats::default());
+    assert!(
+        legacy
+            .files
+            .iter()
+            .all(|file| file.version == weavatrix_scan::FileVersion::default())
+    );
 
     let selected = Scanner::new(&fixture)
         .options(ScanOptions::default().selected_files_only())
@@ -36,6 +53,51 @@ fn scan_report_round_trips_through_json() {
     let selected_json = serde_json::to_string(&selected).unwrap();
     let selected_decoded = serde_json::from_str(&selected_json).unwrap();
     assert_eq!(selected, selected_decoded);
+
+    let _ = std::fs::remove_dir_all(fixture);
+}
+
+#[test]
+fn portable_report_json_omits_private_paths_and_round_trips() {
+    let fixture =
+        std::env::temp_dir().join(format!("private-repository-name-{}", std::process::id()));
+    std::fs::create_dir_all(fixture.join("src")).unwrap();
+    std::fs::write(fixture.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    let report = Scanner::new(&fixture)
+        .options(ScanOptions::default().with_extensions(["rs"]))
+        .scan()
+        .unwrap();
+    let portable = report.to_portable();
+    let json = serde_json::to_string(&portable).unwrap();
+    let decoded: weavatrix_scan::PortableScanReport = serde_json::from_str(&json).unwrap();
+
+    assert!(!json.contains("private-repository-name"));
+    assert!(!json.contains("absolute"));
+    assert!(!json.contains("modified_ns"));
+    assert_eq!(portable, decoded);
+
+    let _ = std::fs::remove_dir_all(fixture);
+}
+
+#[test]
+fn compact_scan_cache_round_trips_with_an_explicit_format_version() {
+    let fixture =
+        std::env::temp_dir().join(format!("weavatrix-scan-cache-serde-{}", std::process::id()));
+    std::fs::create_dir_all(&fixture).unwrap();
+    std::fs::write(fixture.join("lib.rs"), "pub fn run() {}\n").unwrap();
+    let report = Scanner::new(&fixture)
+        .options(ScanOptions::default().with_extensions(["rs"]))
+        .scan()
+        .unwrap();
+    let cache = report.to_cache();
+    let json = serde_json::to_string(&cache).unwrap();
+    let decoded: weavatrix_scan::ScanCache = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        cache.format_version,
+        weavatrix_scan::SCAN_CACHE_FORMAT_VERSION
+    );
+    assert_eq!(cache, decoded);
 
     let _ = std::fs::remove_dir_all(fixture);
 }

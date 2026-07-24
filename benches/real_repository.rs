@@ -12,25 +12,21 @@ const EXTENSIONS: &[&str] = &[
 
 fn main() {
     let root = benchmark_root();
-    println!(
-        "corpus=real root={} statistic=median runs=11 warmups=2",
-        root.display()
-    );
+    println!("corpus=real statistic=median runs=11 warmups=2");
     let ours = weavatrix_manifest(&root);
     let competitor = ignore_manifest(&root);
     if ours != competitor {
         let only_ours = ours
             .iter()
             .filter(|path| competitor.binary_search(path).is_err())
-            .collect::<Vec<_>>();
+            .count();
         let only_competitor = competitor
             .iter()
             .filter(|path| ours.binary_search(path).is_err())
-            .collect::<Vec<_>>();
-        eprintln!("only_weavatrix={only_ours:?}");
-        eprintln!("only_ignore={only_competitor:?}");
+            .count();
+        eprintln!("manifest mismatch: only_weavatrix={only_ours} only_ignore={only_competitor}");
+        panic!("real-repository manifests differ");
     }
-    assert_eq!(ours, competitor);
 
     let mut cases = vec![
         BenchmarkCase::new("weavatrix-scan", || weavatrix_manifest(&root).len()),

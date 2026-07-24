@@ -1,5 +1,6 @@
 use crate::control::CancellationToken;
-use crate::walker::{ErrorPolicy, WalkOptions};
+use crate::file_types::{FileTypeMatch, NamedFileTypes};
+use crate::walker::WalkOptions;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -7,6 +8,8 @@ use std::time::Duration;
 
 mod ignore_policy;
 mod limits;
+mod runtime;
+mod walk;
 
 pub use ignore_policy::IgnorePolicy;
 pub use limits::ScanLimits;
@@ -39,11 +42,33 @@ pub enum EvidenceMode {
     SelectedFiles,
 }
 
+/// Controls how persistent content hashes are validated before reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheValidationPolicy {
+    /// Trust stable size, timestamp and available native identity evidence.
+    Fast,
+    /// Read a whole-file 128-bit fingerprint before reusing the prior SHA-256.
+    Strict,
+}
+
+/// Controls post-read snapshot verification for newly opened content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentValidationPolicy {
+    /// Verify the opened handle against discovery evidence before reading.
+    /// This is appropriate for latency-sensitive local search.
+    Fast,
+    /// Also re-check native file evidence after reading to reject concurrent
+    /// same-size modifications.
+    Strict,
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ScanOptions {
     pub max_file_bytes: u64,
     pub extensions: BTreeSet<String>,
+    /// Reusable named file-pattern groups, combined with `extensions`.
+    pub file_types: NamedFileTypes,
     pub ignore_files: Vec<String>,
     /// High-precedence include/exclude globs using `ignore::Override` syntax.
     pub override_rules: Vec<String>,
@@ -58,12 +83,23 @@ pub struct ScanOptions {
     pub detect_binary_files: bool,
     /// Record typed evidence for entries excluded by policy.
     pub evidence: EvidenceMode,
-    /// Content-inspection workers. Zero selects the available parallelism.
+    /// Traversal and content-inspection workers. Zero selects available
+    /// parallelism. Retained as the shared backward-compatible default.
     pub parallelism: usize,
+    /// Optional traversal-only worker override. `Some(0)` selects available
+    /// parallelism independently of content inspection.
+    pub traversal_parallelism: Option<usize>,
+    /// Optional content-inspection worker override. `Some(0)` selects
+    /// available parallelism independently of traversal.
+    pub content_parallelism: Option<usize>,
     /// Whole-scan resource bounds. All limits are disabled by default.
     pub limits: ScanLimits,
     /// Optional cooperative cancellation signal.
     pub cancellation: Option<CancellationToken>,
+    /// Persistent hash validation policy.
+    pub cache_validation: CacheValidationPolicy,
+    /// New content-read validation policy.
+    pub content_validation: ContentValidationPolicy,
     /// Low-level traversal policy.
     pub walk: WalkOptions,
 }
@@ -73,6 +109,7 @@ impl Default for ScanOptions {
         Self {
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             extensions: BTreeSet::new(),
+            file_types: NamedFileTypes::default(),
             ignore_files: DEFAULT_IGNORE_FILES
                 .iter()
                 .map(ToString::to_string)
@@ -86,8 +123,12 @@ impl Default for ScanOptions {
             detect_binary_files: true,
             evidence: EvidenceMode::Complete,
             parallelism: 0,
+            traversal_parallelism: None,
+            content_parallelism: None,
             limits: ScanLimits::default(),
             cancellation: None,
+            cache_validation: CacheValidationPolicy::Fast,
+            content_validation: ContentValidationPolicy::Strict,
             walk: WalkOptions::default().with_metadata(true),
         }
     }
@@ -104,6 +145,13 @@ impl ScanOptions {
             .into_iter()
             .map(|item| item.as_ref().trim_start_matches('.').to_ascii_lowercase())
             .collect();
+        self
+    }
+
+    /// Replaces named file-type definitions and selections.
+    #[must_use]
+    pub fn with_file_types(mut self, file_types: NamedFileTypes) -> Self {
+        self.file_types = file_types;
         self
     }
 
@@ -173,10 +221,26 @@ impl ScanOptions {
         self
     }
 
-    /// Sets content-inspection workers. Zero restores automatic selection.
+    /// Sets the shared traversal and content worker default.
+    ///
+    /// A later traversal- or content-specific override takes precedence.
     #[must_use]
     pub const fn with_parallelism(mut self, parallelism: usize) -> Self {
         self.parallelism = parallelism;
+        self
+    }
+
+    /// Sets traversal workers without changing content-inspection workers.
+    #[must_use]
+    pub const fn with_traversal_parallelism(mut self, parallelism: usize) -> Self {
+        self.traversal_parallelism = Some(parallelism);
+        self
+    }
+
+    /// Sets content-inspection workers without changing traversal workers.
+    #[must_use]
+    pub const fn with_content_parallelism(mut self, parallelism: usize) -> Self {
+        self.content_parallelism = Some(parallelism);
         self
     }
 
@@ -205,38 +269,14 @@ impl ScanOptions {
     }
 
     #[must_use]
-    pub const fn with_max_depth(mut self, max_depth: Option<usize>) -> Self {
-        self.walk.max_depth = max_depth;
+    pub const fn with_cache_validation(mut self, policy: CacheValidationPolicy) -> Self {
+        self.cache_validation = policy;
         self
     }
 
     #[must_use]
-    pub const fn with_min_depth(mut self, min_depth: usize) -> Self {
-        self.walk.min_depth = min_depth;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_max_open(mut self, max_open: usize) -> Self {
-        self.walk.max_open = if max_open == 0 { 1 } else { max_open };
-        self
-    }
-
-    #[must_use]
-    pub const fn with_same_file_system(mut self, enabled: bool) -> Self {
-        self.walk.same_file_system = enabled;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_follow_links(mut self, enabled: bool) -> Self {
-        self.walk.follow_links = enabled;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_error_policy(mut self, policy: ErrorPolicy) -> Self {
-        self.walk.error_policy = policy;
+    pub const fn with_content_validation(mut self, policy: ContentValidationPolicy) -> Self {
+        self.content_validation = policy;
         self
     }
 
@@ -247,7 +287,18 @@ impl ScanOptions {
                 .any(|candidate| name == OsStr::new(candidate))
     }
 
-    pub(crate) fn accepts_extension(&self, path: &Path) -> bool {
+    pub(crate) fn accepts_extension(&self, path: &Path, relative: &str) -> bool {
+        if self.extensions.is_empty() && !self.file_types.is_active() {
+            return true;
+        }
+        match self.file_types.matched(path, relative) {
+            FileTypeMatch::Include => return true,
+            FileTypeMatch::Exclude => return false,
+            FileTypeMatch::None => {}
+        }
+        if self.extensions.is_empty() && self.file_types.has_includes() {
+            return false;
+        }
         if self.extensions.is_empty() {
             return true;
         }
@@ -267,29 +318,5 @@ impl ScanOptions {
         } else {
             self.extensions.contains(extension)
         }
-    }
-
-    pub(crate) fn worker_count(&self, file_count: usize) -> usize {
-        if file_count == 0 {
-            return 1;
-        }
-        let requested = if self.parallelism == 0 {
-            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
-        } else {
-            self.parallelism
-        };
-        requested.min(file_count.div_ceil(128)).max(1)
-    }
-
-    pub(crate) const fn walk_options(&self) -> WalkOptions {
-        let mut options = self.walk;
-        options.min_depth = 0;
-        options
-    }
-
-    pub(crate) fn effective_min_depth(&self) -> usize {
-        self.walk.max_depth.map_or(self.walk.min_depth, |maximum| {
-            self.walk.min_depth.min(maximum)
-        })
     }
 }

@@ -1,3 +1,5 @@
+use crate::report::FileVersion;
+use crate::walk_platform::DirectoryIdentity;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io;
@@ -9,6 +11,15 @@ pub enum ErrorPolicy {
     Abort,
 }
 
+/// Controls whether the explicitly supplied root itself may be a symlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootSymlinkPolicy {
+    /// Resolve or traverse the requested root for backward compatibility.
+    Follow,
+    /// Reject a symlink at the final root path component.
+    Reject,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkOptions {
     pub min_depth: usize,
@@ -18,6 +29,7 @@ pub struct WalkOptions {
     pub follow_links: bool,
     pub collect_metadata: bool,
     pub error_policy: ErrorPolicy,
+    pub root_symlink_policy: RootSymlinkPolicy,
 }
 
 impl Default for WalkOptions {
@@ -25,16 +37,20 @@ impl Default for WalkOptions {
         Self {
             min_depth: 0,
             max_depth: None,
-            max_open: 64,
+            max_open: Self::DEFAULT_MAX_OPEN,
             same_file_system: false,
             follow_links: false,
             collect_metadata: false,
             error_policy: ErrorPolicy::Continue,
+            root_symlink_policy: RootSymlinkPolicy::Follow,
         }
     }
 }
 
 impl WalkOptions {
+    /// Default hard upper bound for simultaneously open directory handles.
+    pub const DEFAULT_MAX_OPEN: usize = 64;
+
     #[must_use]
     pub const fn with_min_depth(mut self, min_depth: usize) -> Self {
         self.min_depth = min_depth;
@@ -77,6 +93,12 @@ impl WalkOptions {
         self
     }
 
+    #[must_use]
+    pub const fn with_root_symlink_policy(mut self, policy: RootSymlinkPolicy) -> Self {
+        self.root_symlink_policy = policy;
+        self
+    }
+
     pub(crate) fn normalized(mut self) -> Self {
         self.max_open = self.max_open.max(1);
         if let Some(max_depth) = self.max_depth
@@ -94,6 +116,7 @@ pub enum WalkOperation {
     ReadDirectory,
     ReadEntry,
     ReadMetadata,
+    ScheduleWorker,
 }
 
 #[derive(Debug)]
@@ -184,6 +207,8 @@ pub struct WalkEntry {
     pub(crate) is_directory: bool,
     pub(crate) is_symlink: bool,
     pub(crate) bytes: Option<u64>,
+    pub(crate) version: Option<FileVersion>,
+    pub(crate) directory_identity: Option<DirectoryIdentity>,
     pub(crate) skip_reason: Option<WalkSkipReason>,
 }
 
@@ -191,6 +216,12 @@ impl WalkEntry {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Consumes the entry and returns its owned path without cloning.
+    #[must_use]
+    pub fn into_path(self) -> PathBuf {
+        self.path
     }
 
     #[must_use]
@@ -236,6 +267,12 @@ impl WalkEntry {
         self.bytes
     }
 
+    /// Snapshot evidence captured with file metadata, when requested.
+    #[must_use]
+    pub const fn version(&self) -> Option<FileVersion> {
+        self.version
+    }
+
     #[must_use]
     pub const fn skip_reason(&self) -> Option<WalkSkipReason> {
         self.skip_reason
@@ -251,6 +288,10 @@ impl WalkEntry {
             self.skip_reason = None;
         }
     }
+
+    pub(crate) const fn directory_identity(&self) -> Option<DirectoryIdentity> {
+        self.directory_identity
+    }
 }
 
 const fn operation_name(operation: WalkOperation) -> &'static str {
@@ -259,5 +300,6 @@ const fn operation_name(operation: WalkOperation) -> &'static str {
         WalkOperation::ReadDirectory => "read directory",
         WalkOperation::ReadEntry => "read entry",
         WalkOperation::ReadMetadata => "read metadata",
+        WalkOperation::ScheduleWorker => "schedule worker",
     }
 }

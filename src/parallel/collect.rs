@@ -41,8 +41,13 @@ pub(super) fn collect_lane(
                 }
             }
         } else {
-            let walker =
-                Walker::from_known_directory(parallel_root, task.path, task.depth, worker_options);
+            let walker = Walker::from_known_directory(
+                parallel_root,
+                task.path,
+                task.depth,
+                worker_options,
+                None,
+            );
             for item in walker {
                 match item {
                     Ok(entry) => report.entries.push(entry),
@@ -139,6 +144,63 @@ pub(super) fn collect_shallow(root: &Path, options: WalkOptions) -> Result<Shall
         errors,
         tasks,
     })
+}
+
+pub(super) fn expand_frontier(
+    mut shallow: ShallowWalk,
+    options: WalkOptions,
+    target_tasks: usize,
+) -> ShallowWalk {
+    while !shallow.tasks.is_empty() && shallow.tasks.len() < target_tasks {
+        let current = std::mem::take(&mut shallow.tasks);
+        let root = Arc::clone(&shallow.root);
+        for task in current {
+            expand_task(&task, options, &root, &mut shallow);
+        }
+    }
+    shallow
+}
+
+fn expand_task(
+    task: &DirectoryTask,
+    options: WalkOptions,
+    root: &Arc<PathBuf>,
+    shallow: &mut ShallowWalk,
+) {
+    let mut worker_options = options;
+    worker_options.error_policy = ErrorPolicy::Continue;
+    worker_options.min_depth = 0;
+    worker_options.max_open = 1;
+    worker_options.max_depth = Some(
+        options
+            .max_depth
+            .unwrap_or(task.depth + 1)
+            .min(task.depth + 1),
+    );
+    let walker =
+        Walker::from_known_directory(root, task.path.clone(), task.depth, worker_options, None);
+    for item in walker {
+        match item {
+            Ok(mut entry) => {
+                let can_descend = entry.is_dir()
+                    && entry.skip_reason() == Some(WalkSkipReason::MaxDepth)
+                    && options
+                        .max_depth
+                        .is_none_or(|maximum| entry.depth() < maximum);
+                if can_descend {
+                    entry.clear_depth_skip();
+                    shallow.tasks.push_back(DirectoryTask {
+                        path: entry.path().to_path_buf(),
+                        depth: entry.depth(),
+                    });
+                }
+                if entry.depth() >= options.min_depth {
+                    shallow.entries.push(entry);
+                }
+            }
+            Err(error) => shallow.errors.push(error),
+        }
+    }
 }
 
 pub(super) fn collect_serial(

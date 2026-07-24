@@ -60,6 +60,73 @@ fn non_utf8_paths_and_symlink_loops_have_lossless_differential_evidence() {
     assert!(loop_errors > 0);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_rules_are_lossless_and_percent_rules_match_ignore() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let fixture = support::Fixture::new("weavatrix-scan-native-ignore");
+    let native_name = OsString::from_vec(vec![
+        b'n', b'a', b't', b'i', b'v', b'e', 0x80, b'.', b'r', b's',
+    ]);
+    std::fs::write(fixture.root.join(&native_name), "fn native() {}\n").unwrap();
+    fixture.write("100%.rs", "fn percent() {}\n");
+    fixture.write("visible.rs", "fn visible() {}\n");
+    fixture.write(
+        ".gitignore",
+        [b"native".as_slice(), &[0x80], b".rs\n100%.rs\n".as_slice()].concat(),
+    );
+
+    let mut options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .metadata_only();
+    options.standard_skips = StandardSkips::Disabled;
+    let ours = Scanner::new(&fixture.root).options(options).scan().unwrap();
+    let ours = ours
+        .files
+        .into_iter()
+        .map(|file| file.absolute)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(ours, BTreeSet::from([fixture.root.join("visible.rs")]));
+
+    fixture.write(".gitignore", "100%.rs\n");
+    let mut percent_options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .metadata_only();
+    percent_options.standard_skips = StandardSkips::Disabled;
+    let percent_ours = Scanner::new(&fixture.root)
+        .options(percent_options)
+        .scan()
+        .unwrap()
+        .files
+        .into_iter()
+        .map(|file| file.absolute)
+        .collect::<BTreeSet<_>>();
+
+    let mut builder = WalkBuilder::new(&fixture.root);
+    builder
+        .hidden(false)
+        .parents(false)
+        .require_git(false)
+        .git_global(false)
+        .git_exclude(false);
+    let reference = builder
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "rs")
+        })
+        .map(ignore::DirEntry::into_path)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(percent_ours, reference);
+}
+
 #[cfg(unix)]
 #[test]
 fn followed_symlink_loops_are_typed_on_unix() {
