@@ -3,6 +3,17 @@ use crate::report::{
 };
 use std::path::{Path, PathBuf};
 
+/// Controls whether a content visit retains selected-file evidence internally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentVisitMode {
+    /// Retain compact selected-file evidence and compute a deterministic
+    /// revision.
+    Revision,
+    /// Emit bytes and counters without retaining selected-file evidence or
+    /// computing a revision.
+    Streaming,
+}
+
 /// Controls delivery from [`crate::Scanner::visit_content`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentVisitControl {
@@ -66,6 +77,7 @@ pub enum ContentVisitEvent<'a> {
 /// Summary of a parallel, one-pass selected-content visit.
 #[derive(Debug)]
 pub struct ContentVisitReport {
+    pub mode: ContentVisitMode,
     pub root: PathBuf,
     /// Candidates selected by traversal and ignore rules before content checks.
     pub discovered: u64,
@@ -85,4 +97,45 @@ pub struct ContentVisitReport {
     pub termination: Option<ScanTermination>,
     pub portable: bool,
     pub cache: ScanCacheStats,
+}
+
+/// Ordered summaries from a multi-root content visit.
+#[derive(Debug)]
+pub struct MultiContentVisitReport {
+    /// Reports remain in the same order as roots were added.
+    pub reports: Vec<ContentVisitReport>,
+}
+
+impl MultiContentVisitReport {
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.reports.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.reports.is_empty()
+    }
+}
+
+/// Content and removals produced by a safe file-only watcher plan.
+#[derive(Debug)]
+pub struct ChangedContentVisitReport {
+    /// Evidence for the changed files that still exist and remain selected.
+    ///
+    /// Its revision describes this changed-file subset, not the complete
+    /// repository manifest.
+    pub content: ContentVisitReport,
+    /// Stable normalized paths that disappeared from the repository.
+    pub removed: Vec<String>,
+}
+
+/// Result of attempting a traversal-free watcher content visit.
+#[derive(Debug)]
+pub enum ChangedContentVisitOutcome {
+    /// Only changed file paths were matched, opened, and visited.
+    Visited(Box<ChangedContentVisitReport>),
+    /// The plan can affect directory structure or selection and therefore
+    /// requires the caller to perform a complete scan.
+    FullRescanRequired,
 }

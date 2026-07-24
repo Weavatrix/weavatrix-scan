@@ -9,6 +9,8 @@ use std::fs::File;
 use std::io::{self, Read as _};
 use std::path::Path;
 
+use super::ContentWorkerContext;
+
 pub(super) enum Inspection {
     Selected(ScannedFile),
     Binary(String),
@@ -98,9 +100,8 @@ pub(super) fn inspect(mut scanned: ScannedFile, options: &ScanOptions) -> io::Re
 pub(super) fn inspect_with_visitor<V>(
     scanned: &mut ScannedFile,
     options: &ScanOptions,
-    root: &Path,
+    context: ContentWorkerContext<'_>,
     sequence: u64,
-    worker_index: usize,
     buffer: &mut [u8],
     visitor: &mut V,
 ) -> io::Result<VisitedInspection>
@@ -134,8 +135,8 @@ where
 
     let mut consumer_skipped = false;
     match visitor(ContentVisitEvent::FileStart {
-        worker_index,
-        file: content_file(root, scanned, sequence),
+        worker_index: context.worker_index,
+        file: content_file(context.root, context.root_index, scanned, sequence),
     }) {
         ContentVisitControl::Continue => {}
         ContentVisitControl::SkipFile => consumer_skipped = true,
@@ -198,8 +199,8 @@ where
             chunks = chunks.saturating_add(1);
             bytes_emitted = bytes_emitted.saturating_add(read as u64);
             match visitor(ContentVisitEvent::Chunk {
-                worker_index,
-                file: content_file(root, scanned, sequence),
+                worker_index: context.worker_index,
+                file: content_file(context.root, context.root_index, scanned, sequence),
                 offset,
                 bytes,
             }) {
@@ -233,8 +234,9 @@ where
     {
         let visitor_quit = emit_end(
             visitor,
-            worker_index,
-            root,
+            context.worker_index,
+            context.root,
+            context.root_index,
             scanned,
             sequence,
             ContentFileStatus::Changed,
@@ -256,8 +258,9 @@ where
     if binary {
         let visitor_quit = emit_end(
             visitor,
-            worker_index,
-            root,
+            context.worker_index,
+            context.root,
+            context.root_index,
             scanned,
             sequence,
             ContentFileStatus::Binary,
@@ -283,8 +286,9 @@ where
     scanned.content_fingerprint = fingerprint.map(ContentFingerprint::finish);
     let visitor_quit = emit_end(
         visitor,
-        worker_index,
-        root,
+        context.worker_index,
+        context.root,
+        context.root_index,
         scanned,
         sequence,
         ContentFileStatus::Selected,
@@ -304,9 +308,14 @@ where
     })
 }
 
-fn content_file<'a>(root: &'a Path, scanned: &'a ScannedFile, sequence: u64) -> ContentFile<'a> {
+fn content_file<'a>(
+    root: &'a Path,
+    root_index: usize,
+    scanned: &'a ScannedFile,
+    sequence: u64,
+) -> ContentFile<'a> {
     ContentFile {
-        root_index: 0,
+        root_index,
         sequence,
         root,
         absolute: &scanned.absolute,
@@ -320,6 +329,7 @@ fn emit_end<V>(
     visitor: &mut V,
     worker_index: usize,
     root: &Path,
+    root_index: usize,
     scanned: &ScannedFile,
     sequence: u64,
     status: ContentFileStatus,
@@ -333,7 +343,7 @@ where
 {
     if visitor(ContentVisitEvent::FileEnd {
         worker_index,
-        file: content_file(root, scanned, sequence),
+        file: content_file(root, root_index, scanned, sequence),
         status,
         bytes_read,
         content_hash,

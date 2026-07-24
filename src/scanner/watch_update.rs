@@ -125,14 +125,14 @@ pub(super) fn scan_watch_plan(
     Ok(report)
 }
 
-enum ChangedPath {
+pub(super) enum ChangedPath {
     Candidate(Box<ScannedFile>),
     MissingOrSkipped,
     NeedsFullScan,
 }
 
 #[allow(clippy::too_many_lines)]
-fn changed_candidate(
+pub(super) fn changed_candidate(
     root: &Path,
     relative: &str,
     options: &ScanOptions,
@@ -294,7 +294,7 @@ fn local_error(
     Ok(ChangedPath::MissingOrSkipped)
 }
 
-fn is_safe_relative(relative: &str) -> bool {
+pub(super) fn is_safe_relative(relative: &str) -> bool {
     !relative.is_empty()
         && normalized_relative_path(Path::new(relative)) == relative
         && Path::new(relative).components().all(|component| {

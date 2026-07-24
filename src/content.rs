@@ -1,6 +1,6 @@
 use crate::cache::{ScanCache, ScanCacheEntry};
 use crate::config::{CacheValidationPolicy, EvidenceMode, ScanOptions};
-use crate::content_visit::{ContentVisitControl, ContentVisitEvent};
+use crate::content_visit::{ContentVisitControl, ContentVisitEvent, ContentVisitMode};
 use crate::error::{Error, Result};
 use crate::file_version::reusable;
 use crate::report::{
@@ -16,6 +16,14 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 mod inspect;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ContentWorkerContext<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) root_index: usize,
+    pub(crate) worker_index: usize,
+    pub(crate) mode: ContentVisitMode,
+}
 
 pub(crate) struct InspectedFiles {
     pub(crate) files: Vec<ScannedFile>,
@@ -33,6 +41,7 @@ pub(crate) struct VisitedFiles {
     pub(crate) bytes_read: u64,
     pub(crate) bytes_emitted: u64,
     pub(crate) consumer_skipped: u64,
+    pub(crate) completed: u64,
     pub(crate) visitor_quit: bool,
 }
 
@@ -52,6 +61,7 @@ impl VisitedFiles {
             bytes_read: 0,
             bytes_emitted: 0,
             consumer_skipped: 0,
+            completed: 0,
             visitor_quit: false,
         }
     }
@@ -81,6 +91,7 @@ impl VisitedFiles {
         self.bytes_read = self.bytes_read.saturating_add(other.bytes_read);
         self.bytes_emitted = self.bytes_emitted.saturating_add(other.bytes_emitted);
         self.consumer_skipped = self.consumer_skipped.saturating_add(other.consumer_skipped);
+        self.completed = self.completed.saturating_add(other.completed);
         self.visitor_quit |= other.visitor_quit;
     }
 }
@@ -239,11 +250,10 @@ fn inspect_chunk(
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn visit_files<V>(
-    root: &Path,
     files: Vec<(u64, CompactScannedFile)>,
     options: &ScanOptions,
     started: Instant,
-    worker_index: usize,
+    context: ContentWorkerContext<'_>,
     buffer: &mut [u8],
     visitor: &mut V,
 ) -> Result<VisitedFiles>
@@ -280,7 +290,7 @@ where
             .expect("content visit retains file-version evidence");
         let relative = compact.relative.into_string();
         let mut scanned = ScannedFile {
-            absolute: root.join(&relative),
+            absolute: context.root.join(&relative),
             relative,
             bytes: compact.bytes,
             content_hash: None,
@@ -293,9 +303,8 @@ where
         match inspect::inspect_with_visitor(
             &mut scanned,
             options,
-            root,
+            context,
             sequence,
-            worker_index,
             buffer,
             visitor,
         ) {
@@ -314,27 +323,30 @@ where
                 }
                 match result.status {
                     Some(VisitedStatus::Selected) => {
-                        visited.files.push((
-                            sequence,
-                            CompactScannedFile {
-                                relative: scanned.relative.into_boxed_str(),
-                                bytes: scanned.bytes,
-                                content: (options.hash_file_contents
-                                    || options.detect_binary_files)
-                                    .then(|| {
-                                        Box::new(CompactContentEvidence {
-                                            content_hash: scanned
-                                                .content_hash
-                                                .map(String::into_boxed_str),
-                                            content_fingerprint: scanned
-                                                .content_fingerprint
-                                                .map(String::into_boxed_str),
-                                            version: scanned.version,
-                                            binary_checked: scanned.binary_checked,
-                                        })
-                                    }),
-                            },
-                        ));
+                        visited.completed = visited.completed.saturating_add(1);
+                        if context.mode == ContentVisitMode::Revision {
+                            visited.files.push((
+                                sequence,
+                                CompactScannedFile {
+                                    relative: scanned.relative.into_boxed_str(),
+                                    bytes: scanned.bytes,
+                                    content: (options.hash_file_contents
+                                        || options.detect_binary_files)
+                                        .then(|| {
+                                            Box::new(CompactContentEvidence {
+                                                content_hash: scanned
+                                                    .content_hash
+                                                    .map(String::into_boxed_str),
+                                                content_fingerprint: scanned
+                                                    .content_fingerprint
+                                                    .map(String::into_boxed_str),
+                                                version: scanned.version,
+                                                binary_checked: scanned.binary_checked,
+                                            })
+                                        }),
+                                },
+                            ));
+                        }
                     }
                     Some(VisitedStatus::Binary) => {
                         record_binary_skip(&mut visited.evidence, scanned.relative, options);

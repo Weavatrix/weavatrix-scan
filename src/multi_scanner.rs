@@ -1,9 +1,14 @@
 use crate::config::ScanOptions;
+use crate::content_visit::{
+    ContentVisitControl, ContentVisitEvent, ContentVisitMode, ContentVisitReport,
+    MultiContentVisitReport,
+};
 use crate::error::Result;
 use crate::report::ScanReport;
 use crate::runtime::ParallelRuntime;
-use crate::scanner::scan_repository_with_runtime;
+use crate::scanner::{Scanner, scan_repository_with_runtime};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Deterministic collection of independently rooted scan reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +131,156 @@ impl MultiScanner {
             .collect::<Result<Vec<_>>>()?;
         Ok(MultiScanReport { reports })
     }
+
+    /// Visits selected content across all roots with globally bounded
+    /// parallelism and returns root reports in insertion order.
+    ///
+    /// The factory receives `(root_index, worker_index)` and creates state for
+    /// one content worker. Every event carries the same `root_index`.
+    /// `ContentVisitControl::Quit` cancels work across every root.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error in root insertion order after all already
+    /// started root visits have joined.
+    ///
+    /// # Panics
+    ///
+    /// Propagates a panic from a factory or visitor after active root visits
+    /// observe cancellation.
+    pub fn visit_content<Factory, Visitor>(
+        self,
+        factory: Factory,
+    ) -> Result<MultiContentVisitReport>
+    where
+        Factory: Fn(usize, usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        self.visit_content_with_mode(ContentVisitMode::Revision, factory)
+    }
+
+    /// Visits content across all roots without retaining selected-file
+    /// manifests or computing per-root revisions.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::visit_content`].
+    pub fn visit_content_streaming<Factory, Visitor>(
+        self,
+        factory: Factory,
+    ) -> Result<MultiContentVisitReport>
+    where
+        Factory: Fn(usize, usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        self.visit_content_with_mode(ContentVisitMode::Streaming, factory)
+    }
+
+    fn visit_content_with_mode<Factory, Visitor>(
+        mut self,
+        mode: ContentVisitMode,
+        factory: Factory,
+    ) -> Result<MultiContentVisitReport>
+    where
+        Factory: Fn(usize, usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        let cancellation = self.options.cancellation.clone().unwrap_or_default();
+        self.options.cancellation = Some(cancellation.clone());
+        let worker_count = if self.runtime.is_worker_thread() {
+            1
+        } else {
+            root_worker_count(self.root_parallelism, self.roots.len())
+        };
+        let factory = Arc::new(factory);
+        if worker_count <= 1 {
+            let reports = self
+                .roots
+                .into_iter()
+                .enumerate()
+                .map(|(root_index, root)| {
+                    visit_root_content(
+                        root,
+                        root_index,
+                        &self.options,
+                        &self.runtime,
+                        mode,
+                        Arc::clone(&factory),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(MultiContentVisitReport { reports });
+        }
+
+        let chunk_size = self.roots.len().div_ceil(worker_count);
+        let indexed = self.roots.into_iter().enumerate().collect::<Vec<_>>();
+        let mut visited = std::thread::scope(|scope| {
+            indexed
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    let options = &self.options;
+                    let runtime = self.runtime.clone();
+                    let factory = Arc::clone(&factory);
+                    let cancellation = cancellation.clone();
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|(root_index, root)| {
+                                let result = visit_root_content(
+                                    root.clone(),
+                                    *root_index,
+                                    options,
+                                    &runtime,
+                                    mode,
+                                    Arc::clone(&factory),
+                                );
+                                if result.is_err() {
+                                    cancellation.cancel();
+                                }
+                                (*root_index, result)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|handle| {
+                    handle
+                        .join()
+                        .expect("multi-root content visitor worker panicked")
+                })
+                .collect::<Vec<_>>()
+        });
+        visited.sort_unstable_by_key(|(root_index, _)| *root_index);
+        let reports = visited
+            .into_iter()
+            .map(|(_, report)| report)
+            .collect::<Result<Vec<ContentVisitReport>>>()?;
+        Ok(MultiContentVisitReport { reports })
+    }
+}
+
+fn visit_root_content<Factory, Visitor>(
+    root: PathBuf,
+    root_index: usize,
+    options: &ScanOptions,
+    runtime: &ParallelRuntime,
+    mode: ContentVisitMode,
+    factory: Arc<Factory>,
+) -> Result<ContentVisitReport>
+where
+    Factory: Fn(usize, usize) -> Visitor + Send + Sync + 'static,
+    Visitor: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+{
+    Scanner::new(root)
+        .options(options.clone())
+        .runtime(runtime.clone())
+        .visit_content_with_root_mode(root_index, mode, move |worker_index| {
+            factory(root_index, worker_index)
+        })
 }
 
 fn root_worker_count(requested: usize, roots: usize) -> usize {

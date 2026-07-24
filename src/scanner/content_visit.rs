@@ -2,8 +2,11 @@ use super::Scanner;
 use super::compact::{apply_total_bytes_limit, compact_revision, discover_compact, sort_evidence};
 use super::entry::{process_entry_with, record_walk_error, walker_error_into_scan_error};
 use crate::config::ScanOptions;
-use crate::content::{VisitedFiles, visit_files};
-use crate::content_visit::{ContentVisitControl, ContentVisitEvent, ContentVisitReport};
+use crate::content::{ContentWorkerContext, VisitedFiles, visit_files};
+use crate::content_visit::{
+    ChangedContentVisitOutcome, ChangedContentVisitReport, ContentVisitControl, ContentVisitEvent,
+    ContentVisitMode, ContentVisitReport,
+};
 use crate::error::{Error, Result};
 use crate::ignore::RepositoryMatcher;
 use crate::report::{CompactContentEvidence, CompactScannedFile, FileVersion, ScanReport};
@@ -44,8 +47,109 @@ impl Scanner {
         Visitor:
             for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
     {
+        self.visit_content_with_root(0, factory)
+    }
+
+    /// Visits selected bytes without retaining a selected-file manifest or
+    /// computing a revision.
+    ///
+    /// Typed skip evidence is still retained when `EvidenceMode::Complete` is
+    /// configured. Use `selected_files_only()` as well for constant-memory
+    /// summary reporting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::visit_content`].
+    ///
+    /// # Panics
+    ///
+    /// Propagates callback panics like [`Self::visit_content`].
+    pub fn visit_content_streaming<Factory, Visitor>(
+        self,
+        factory: Factory,
+    ) -> Result<ContentVisitReport>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        self.visit_content_with_root_mode(0, ContentVisitMode::Streaming, factory)
+    }
+
+    /// Visits only safe changed-file paths from a watcher plan.
+    ///
+    /// No directory traversal occurs. Plans that can affect directory
+    /// structure or file-selection rules return
+    /// [`ChangedContentVisitOutcome::FullRescanRequired`] before invoking the
+    /// factory. Removed paths are returned separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns root, matcher, content I/O, or worker-submission failures
+    /// according to the configured error policy.
+    ///
+    /// # Panics
+    ///
+    /// Propagates a panic from the factory or visitor after active workers
+    /// observe cancellation.
+    pub fn visit_changed_content<Factory, Visitor>(
+        self,
+        plan: &crate::WatchPlan,
+        factory: Factory,
+    ) -> Result<ChangedContentVisitOutcome>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        visit_changed_content_plan(self, plan, ContentVisitMode::Revision, factory)
+    }
+
+    /// Visits only changed-file bytes without retaining their compact manifest
+    /// or computing a subset revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::visit_changed_content`].
+    pub fn visit_changed_content_streaming<Factory, Visitor>(
+        self,
+        plan: &crate::WatchPlan,
+        factory: Factory,
+    ) -> Result<ChangedContentVisitOutcome>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        visit_changed_content_plan(self, plan, ContentVisitMode::Streaming, factory)
+    }
+
+    pub(crate) fn visit_content_with_root<Factory, Visitor>(
+        self,
+        root_index: usize,
+        factory: Factory,
+    ) -> Result<ContentVisitReport>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        self.visit_content_with_root_mode(root_index, ContentVisitMode::Revision, factory)
+    }
+
+    pub(crate) fn visit_content_with_root_mode<Factory, Visitor>(
+        self,
+        root_index: usize,
+        mode: ContentVisitMode,
+        factory: Factory,
+    ) -> Result<ContentVisitReport>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
         if self.options.limits.max_total_bytes.is_none() && !self.runtime.is_worker_thread() {
-            return visit_content_streaming(self, factory);
+            return visit_content_direct(self, root_index, mode, factory);
         }
         let mut discovery_options = self.options.clone();
         discovery_options.detect_binary_files = true;
@@ -69,77 +173,98 @@ impl Scanner {
             &scan_runtime,
             &self.runtime,
             workers,
+            root_index,
+            mode,
             factory,
         )?;
 
-        let mut selected = Vec::new();
-        let mut opened = 0_u64;
-        let mut chunks = 0_u64;
-        let mut bytes_read = 0_u64;
-        let mut bytes_emitted = 0_u64;
-        let mut consumer_skipped = 0_u64;
-        let mut visitor_quit = false;
-        for worker in worker_reports {
-            selected.extend(worker.files);
-            evidence.skipped.extend(worker.evidence.skipped);
-            evidence.warnings.extend(worker.evidence.warnings);
-            evidence.termination = evidence.termination.or(worker.evidence.termination);
-            evidence.cache.content_reads = evidence
-                .cache
-                .content_reads
-                .saturating_add(worker.evidence.cache.content_reads);
-            evidence.cache.fingerprint_reads = evidence
-                .cache
-                .fingerprint_reads
-                .saturating_add(worker.evidence.cache.fingerprint_reads);
-            evidence.cache.reused_hashes = evidence
-                .cache
-                .reused_hashes
-                .saturating_add(worker.evidence.cache.reused_hashes);
-            opened = opened.saturating_add(worker.opened);
-            chunks = chunks.saturating_add(worker.chunks);
-            bytes_read = bytes_read.saturating_add(worker.bytes_read);
-            bytes_emitted = bytes_emitted.saturating_add(worker.bytes_emitted);
-            consumer_skipped = consumer_skipped.saturating_add(worker.consumer_skipped);
-            visitor_quit |= worker.visitor_quit;
-        }
-        selected.sort_unstable_by_key(|(sequence, _)| *sequence);
-        let files = selected
-            .into_iter()
-            .map(|(_, file)| file)
-            .collect::<Vec<_>>();
-        if visitor_quit {
-            evidence.complete = false;
-            evidence.termination = Some(crate::ScanTermination::Cancelled);
-        }
-        if !evidence.warnings.is_empty() || evidence.termination.is_some() {
-            evidence.complete = false;
-        }
-        sort_evidence(&mut evidence);
-        let revision = compact_revision(&evidence, &files);
-        let completed = u64::try_from(files.len()).unwrap_or(u64::MAX);
-        let stopped = evidence.termination.is_some();
-        evidence.finish_recording();
-        Ok(ContentVisitReport {
-            root: evidence.root,
+        Ok(finish_content_report(
+            evidence,
             discovered,
-            completed,
-            opened,
-            chunks,
-            bytes_read,
-            bytes_emitted,
-            consumer_skipped,
-            stopped,
-            skipped: evidence.skipped,
-            warnings: evidence.warnings,
-            ignore_sources: evidence.ignore_sources,
-            revision,
-            complete: evidence.complete,
-            termination: evidence.termination,
-            portable: evidence.portable,
-            cache: evidence.cache,
-        })
+            worker_reports,
+            mode,
+        ))
     }
+}
+
+fn visit_changed_content_plan<Factory, Visitor>(
+    scanner: Scanner,
+    plan: &crate::WatchPlan,
+    mode: ContentVisitMode,
+    factory: Factory,
+) -> Result<ChangedContentVisitOutcome>
+where
+    Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+    Visitor: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+{
+    if plan.full_rescan
+        || plan
+            .invalidated()
+            .any(|relative| !super::watch_update::is_safe_relative(relative))
+    {
+        return Ok(ChangedContentVisitOutcome::FullRescanRequired);
+    }
+
+    let mut options = scanner.options;
+    let cancellation = options.cancellation.clone().unwrap_or_default();
+    options.cancellation = Some(cancellation);
+    let mut prepared = prepare_discovery(&scanner.root, &options)?;
+    let mut changed = plan.changed.clone();
+    changed.sort_unstable();
+    changed.dedup();
+    let mut files = Vec::with_capacity(changed.len());
+    for relative in changed {
+        if let Some(reason) = prepared.runtime.before_next(&options) {
+            prepared.evidence.terminate(reason);
+            break;
+        }
+        prepared.runtime.record_entry();
+        match super::watch_update::changed_candidate(
+            &prepared.root,
+            &relative,
+            &options,
+            &mut prepared.matcher,
+            &mut prepared.evidence,
+        )? {
+            super::watch_update::ChangedPath::Candidate(file) => {
+                let file = *file;
+                files.push(content_candidate(file.relative, file.bytes, file.version));
+            }
+            super::watch_update::ChangedPath::MissingOrSkipped => {}
+            super::watch_update::ChangedPath::NeedsFullScan => {
+                return Ok(ChangedContentVisitOutcome::FullRescanRequired);
+            }
+        }
+    }
+    files.sort_unstable_by(|left, right| left.relative.cmp(&right.relative));
+    let selected = u64::try_from(files.len()).unwrap_or(u64::MAX);
+    let (mut evidence, runtime, _) = finish_stream_discovery(prepared, selected);
+    apply_total_bytes_limit(&mut evidence, &mut files, &options);
+    let discovered = u64::try_from(files.len()).unwrap_or(u64::MAX);
+    let workers = options
+        .content_visit_worker_count(files.len())
+        .min(scanner.runtime.parallelism())
+        .max(1);
+    let worker_reports = run_workers(
+        evidence.root.clone(),
+        files,
+        options,
+        &runtime,
+        &scanner.runtime,
+        workers,
+        0,
+        mode,
+        factory,
+    )?;
+    let mut removed = plan.removed.clone();
+    removed.sort_unstable();
+    removed.dedup();
+    Ok(ChangedContentVisitOutcome::Visited(Box::new(
+        ChangedContentVisitReport {
+            content: finish_content_report(evidence, discovered, worker_reports, mode),
+            removed,
+        },
+    )))
 }
 
 struct PreparedDiscovery {
@@ -150,8 +275,10 @@ struct PreparedDiscovery {
 }
 
 #[allow(clippy::too_many_lines)]
-fn visit_content_streaming<Factory, Visitor>(
+fn visit_content_direct<Factory, Visitor>(
     scanner: Scanner,
+    root_index: usize,
+    mode: ContentVisitMode,
     factory: Factory,
 ) -> Result<ContentVisitReport>
 where
@@ -210,11 +337,15 @@ where
                         batch
                     };
                     let visited = visit_files(
-                        &worker_root,
                         batch,
                         &worker_options,
                         started,
-                        worker_index,
+                        ContentWorkerContext {
+                            root: worker_root.as_ref(),
+                            root_index,
+                            worker_index,
+                            mode,
+                        },
                         &mut buffer,
                         &mut visitor,
                     )?;
@@ -253,7 +384,12 @@ where
         {
             evidence.terminate(reason);
         }
-        return Ok(finish_content_report(evidence, discovered, worker_reports));
+        return Ok(finish_content_report(
+            evidence,
+            discovered,
+            worker_reports,
+            mode,
+        ));
     }
 
     drop(sender);
@@ -449,6 +585,7 @@ fn finish_content_report(
     mut evidence: ScanReport,
     discovered: u64,
     worker_reports: Vec<VisitedFiles>,
+    mode: ContentVisitMode,
 ) -> ContentVisitReport {
     let mut selected = Vec::new();
     let mut totals = VisitedFiles::empty(0);
@@ -460,11 +597,6 @@ fn finish_content_report(
     evidence.warnings.extend(totals.evidence.warnings);
     evidence.termination = evidence.termination.or(totals.evidence.termination);
     evidence.cache = totals.evidence.cache;
-    selected.sort_unstable_by(|left, right| left.1.relative.cmp(&right.1.relative));
-    let files = selected
-        .into_iter()
-        .map(|(_, file)| file)
-        .collect::<Vec<_>>();
     if totals.visitor_quit {
         evidence.complete = false;
         evidence.termination = Some(crate::ScanTermination::Cancelled);
@@ -473,14 +605,23 @@ fn finish_content_report(
         evidence.complete = false;
     }
     sort_evidence(&mut evidence);
-    let revision = compact_revision(&evidence, &files);
-    let completed = u64::try_from(files.len()).unwrap_or(u64::MAX);
+    let revision = if mode == ContentVisitMode::Revision {
+        selected.sort_unstable_by(|left, right| left.1.relative.cmp(&right.1.relative));
+        let files = selected
+            .into_iter()
+            .map(|(_, file)| file)
+            .collect::<Vec<_>>();
+        compact_revision(&evidence, &files)
+    } else {
+        String::new()
+    };
     let stopped = evidence.termination.is_some();
     evidence.finish_recording();
     ContentVisitReport {
+        mode,
         root: evidence.root,
         discovered,
-        completed,
+        completed: totals.completed,
         opened: totals.opened,
         chunks: totals.chunks,
         bytes_read: totals.bytes_read,
@@ -506,6 +647,8 @@ fn run_workers<Factory, Visitor>(
     scan_runtime: &ScanRuntime,
     runtime: &ParallelRuntime,
     workers: usize,
+    root_index: usize,
+    mode: ContentVisitMode,
     factory: Factory,
 ) -> Result<Vec<VisitedFiles>>
 where
@@ -524,11 +667,15 @@ where
         let mut visitor = factory(0);
         let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         return visit_files(
-            &root,
             indexed,
             &options,
             scan_runtime.started,
-            0,
+            ContentWorkerContext {
+                root: &root,
+                root_index,
+                worker_index: 0,
+                mode,
+            },
             &mut buffer,
             &mut visitor,
         )
@@ -562,11 +709,15 @@ where
                 let mut visitor = worker_factory(worker_index);
                 let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
                 visit_files(
-                    &worker_root,
                     chunk,
                     &worker_options,
                     started,
-                    worker_index,
+                    ContentWorkerContext {
+                        root: worker_root.as_ref(),
+                        root_index,
+                        worker_index,
+                        mode,
+                    },
                     &mut buffer,
                     &mut visitor,
                 )

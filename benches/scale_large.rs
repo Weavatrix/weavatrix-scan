@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 use weavatrix_scan::{
-    ParallelWalker, ScanOptions, Scanner, StandardSkips, WalkControl, WalkEntry, WalkEvent, Walker,
+    ContentFileStatus, ContentVisitControl, ContentVisitEvent, ParallelWalker, ScanOptions,
+    Scanner, StandardSkips, WalkControl, WalkEntry, WalkEvent, Walker,
 };
 
 const FILES_PER_DIRECTORY: usize = 500;
@@ -50,13 +51,23 @@ fn main() {
         }
         "scanner-all" => benchmark(command, &root, arguments.get(2), || scanner_all(&root)),
         "scanner-rich" => benchmark(command, &root, arguments.get(2), || scanner_rich(&root)),
+        "content-revision" => {
+            benchmark(command, &root, arguments.get(2), || {
+                content_visit(&root, false)
+            });
+        }
+        "content-stream" => {
+            benchmark(command, &root, arguments.get(2), || {
+                content_visit(&root, true)
+            });
+        }
         _ => usage(),
     }
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: scale_large <prepare|verify|walker|parallel-collected|parallel-stream|jwalk|walkdir|ignore|ignore-manifest|scanner|scanner-compact|scanner-all|scanner-rich> <root> [files|runs]"
+        "usage: scale_large <prepare|verify|walker|parallel-collected|parallel-stream|jwalk|walkdir|ignore|ignore-manifest|scanner|scanner-compact|scanner-all|scanner-rich|content-revision|content-stream> <root> [files|runs]"
     );
     std::process::exit(2);
 }
@@ -336,6 +347,50 @@ fn scanner_rich(root: &Path) -> usize {
             .with_extensions(["rs"])
             .selected_files_only(),
     )
+}
+
+fn content_visit(root: &Path, streaming: bool) -> usize {
+    let selected = Arc::new(AtomicUsize::new(0));
+    let scanner = Scanner::new(root).options(
+        ScanOptions::default()
+            .with_extensions(["rs"])
+            .selected_files_only(),
+    );
+    let report = if streaming {
+        scanner.visit_content_streaming({
+            let selected = Arc::clone(&selected);
+            move |_| {
+                let selected = Arc::clone(&selected);
+                move |event| count_selected_content(&event, &selected)
+            }
+        })
+    } else {
+        scanner.visit_content({
+            let selected = Arc::clone(&selected);
+            move |_| {
+                let selected = Arc::clone(&selected);
+                move |event| count_selected_content(&event, &selected)
+            }
+        })
+    }
+    .unwrap();
+    let selected = selected.load(Ordering::Relaxed);
+    assert_eq!(usize::try_from(report.completed).unwrap(), selected);
+    selected
+}
+
+fn count_selected_content(
+    event: &ContentVisitEvent<'_>,
+    selected: &AtomicUsize,
+) -> ContentVisitControl {
+    if let ContentVisitEvent::FileEnd {
+        status: ContentFileStatus::Selected,
+        ..
+    } = event
+    {
+        selected.fetch_add(1, Ordering::Relaxed);
+    }
+    ContentVisitControl::Continue
 }
 
 fn scanner_with_options(root: &Path, options: ScanOptions) -> usize {

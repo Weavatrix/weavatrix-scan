@@ -32,7 +32,8 @@ layers:
 - `CompactScanReport`: the same deterministic selection and revision with one
   retained root path and optional boxed rich evidence for million-file
   manifests;
-- `MultiScanner`: ordered, concurrent scans across independent roots;
+- `MultiScanner`: ordered concurrent manifests and a globally bounded
+  multi-root content pipeline;
 - `ParallelMultiWalker`: collected or direct-streaming traversal across
   concurrent raw roots with ordered per-root reports;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
@@ -89,6 +90,9 @@ walker workload:
 | Parallel collected / streaming traversal | Yes / visitor + bounded pull | No / callback | No / serial iterator | No / ordered iterator |
 | Deterministic backpressured scan sink | Yes | No | No | No |
 | Parallel one-pass verified content callback | Yes | No | No | No |
+| Multi-root verified content callback | Yes | No | No | No |
+| Changed-path-only content callback | Yes | No | No | No |
+| Streaming content without retained manifest | Yes | No | No | No |
 | Parallel pull iterator | Bounded unordered / ordered DFS | No (callback API) | No | Ordered DFS |
 | Parallel multi-root raw traversal | Collected + streaming | Streaming callback | No | No |
 | Parallel multi-root manifest scanner | Yes | No | No | No |
@@ -109,8 +113,9 @@ must be reproducible and explainable.
 ### Remaining competitive boundaries
 
 The functional gaps in retained-manifest memory, embeddable scheduling,
-parallel stateful batches, and parallel multi-root streaming are now closed.
-The remaining differences are evidence and ecosystem boundaries:
+parallel stateful batches, multi-root streaming, and traversal-free changed
+content are now closed. The remaining differences are evidence and ecosystem
+boundaries:
 
 1. **Matcher production history.** `ignore` remains the established
    Git-ignore implementation. Weavatrix checks representative, randomized,
@@ -503,6 +508,22 @@ post-read check for latency-sensitive local search. A deterministic total-byte
 budget automatically uses the compact two-phase path so budget selection
 remains path-order stable.
 
+`visit_content_streaming` keeps the same byte, validation, cancellation, hash,
+and binary contracts but does not retain compact selected-file evidence or
+compute a revision. With `selected_files_only()` it has memory bounded by the
+queue, worker state, and one 64 KiB buffer per worker rather than selected-file
+count. `ContentVisitReport::mode` makes the empty streaming revision explicit.
+A deterministic `max_total_bytes` budget still requires the two-phase
+selection path.
+
+`MultiScanner::visit_content` and `visit_content_streaming` use the selected
+runtime across all roots; the factory receives `(root_index, worker_index)` and
+reports remain in root insertion order. `Scanner::visit_changed_content` and
+`visit_changed_content_streaming` accept a safe file-only `WatchPlan`, read
+only existing changed paths, return removed paths separately, and yield
+`FullRescanRequired` before callbacks for structural or selection-changing
+plans.
+
 ## Output contract
 
 `ScanReport` contains:
@@ -645,6 +666,10 @@ and inspects only changed paths, removes deleted paths from the previous
 manifest, keeps unchanged evidence, and recomputes the deterministic revision
 without traversing the tree. Structural, unsafe, partial, or selection-changing
 plans automatically use a complete scan.
+For indexes that consume bytes directly, `visit_changed_content` performs the
+same safe path matching and one-pass verified content delivery without walking
+unchanged directories. Its revision covers only the changed subset;
+`visit_changed_content_streaming` omits that subset manifest and revision.
 With the optional `notify` feature, `plan_notify` maps `notify::Event` batches
 directly. Access-only events are ignored; imprecise, rescan, and possibly
 structural events conservatively request a complete scan.
@@ -844,6 +869,8 @@ cargo bench --locked --bench scale_large -- verify /tmp/weavatrix-scale
 cargo bench --locked --bench scale_large -- parallel-stream /tmp/weavatrix-scale 5
 cargo bench --locked --bench scale_large -- scanner-compact /tmp/weavatrix-scale 5
 cargo bench --locked --bench scale_large -- scanner /tmp/weavatrix-scale 5
+cargo bench --locked --bench scale_large -- content-revision /tmp/weavatrix-scale 5
+cargo bench --locked --bench scale_large -- content-stream /tmp/weavatrix-scale 5
 ```
 
 The command refuses to populate an existing unmarked directory. The fixture
@@ -964,22 +991,31 @@ opened handle once; `Strict` and its baseline validate before and after the
 read. The raw `ignore` row intentionally omits snapshot validation and is the
 lower-contract throughput floor:
 
-| Content pipeline | Validation | Median |
+| Content pipeline | Retention / validation | Median |
 | --- | --- | ---: |
-| Weavatrix `visit_content` | Opened handle | 75.908 ms |
-| `ignore` + `File::read` | Opened handle | 75.946 ms |
-| Weavatrix `visit_content` | Before and after | 73.698 ms |
-| `ignore` + `File::read` | Before and after | 79.673 ms |
-| `ignore` + `File::read` | None | 71.576 ms |
+| Weavatrix `visit_content_streaming` | None / opened handle | 62.793 ms |
+| Weavatrix `visit_content_streaming` | None / before and after | 73.872 ms |
+| Weavatrix `visit_content` | Revision / opened handle | 83.307 ms |
+| Weavatrix `visit_content` | Revision / before and after | 78.475 ms |
+| `ignore` + `File::read` | None / opened handle | 76.139 ms |
+| `ignore` + `File::read` | None / before and after | 80.529 ms |
+| `ignore` + `File::read` | None / unchecked | 70.748 ms |
 
 These are five independent process medians from 11 interleaved samples after
-two warmups, measured on the Windows host above. Reusing one 64 KiB buffer per
-worker removed per-file allocation pressure. On this tiny-file fixture,
-Weavatrix matched the equivalent fast baseline and was 7.5% faster than the
-equivalent strict baseline; raw unchecked reading remained 6.1% faster than
-Weavatrix Fast. This validates the scanner-to-consumer handoff, not future
-literal or regex matching: final comparison with ripgrep belongs to the Search
-package and must include matched output, line handling, and encoding policy.
+two warmups, measured on the Windows host above. Streaming Fast was 11.2%
+faster than unchecked `ignore` despite validating the opened handle; Streaming
+Strict was 8.3% faster than the equivalent before/after baseline. The
+two-root streaming profile processed 12,002 files in 152.013 ms versus
+163.588 ms for verified `ignore`, 7.1% faster. A safe 1,024-file changed plan
+completed in 47.879 ms versus 109.694 ms for a full 6,000-file scan.
+
+The scale memory check used a temporary 100,000-file fixture with 83,000
+selected empty files. A fresh-process sample measured 7.3 MiB peak for
+streaming versus 39.4 MiB for revision retention, an 81.5% reduction; three-run
+medians were 2,109.956 and 2,182.466 ms respectively. This validates the
+scanner-to-consumer handoff, not future literal or regex matching: final
+comparison with ripgrep belongs to the Search package and must include matched
+output, line handling, and encoding policy.
 
 Source review explains the remaining differences:
 

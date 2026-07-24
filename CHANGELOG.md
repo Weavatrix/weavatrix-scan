@@ -8,6 +8,14 @@ All notable changes to this project are documented here.
   with worker-local state, borrowed byte chunks, single-pass hash/binary
   evidence, stable root/path identity, `SkipFile`/global `Quit`, selected
   runtimes, and reentrant fallback.
+- Add `MultiScanner::{visit_content, visit_content_streaming}` with root-index
+  tagging, shared cancellation, globally bounded execution, and insertion-order
+  reports.
+- Add traversal-free `Scanner::{visit_changed_content,
+  visit_changed_content_streaming}` for safe file-only watcher plans, including
+  typed full-rescan fallback and removed-path output.
+- Add `ContentVisitMode::Streaming`, which keeps byte/hash/binary evidence while
+  omitting selected-file retention and revision computation.
 - Reuse one 64 KiB content buffer per worker instead of allocating one for
   every selected file.
 - Add `ContentValidationPolicy::{Fast, Strict}` and consolidate Windows

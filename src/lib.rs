@@ -56,7 +56,9 @@ pub use config::{
     ScanOptions, StandardSkips,
 };
 pub use content_visit::{
-    ContentFile, ContentFileStatus, ContentVisitControl, ContentVisitEvent, ContentVisitReport,
+    ChangedContentVisitOutcome, ChangedContentVisitReport, ContentFile, ContentFileStatus,
+    ContentVisitControl, ContentVisitEvent, ContentVisitMode, ContentVisitReport,
+    MultiContentVisitReport,
 };
 pub use control::CancellationToken;
 pub use delta::{DeltaQuality, ModifiedFile, RenamedFile, ScanDelta};

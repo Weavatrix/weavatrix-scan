@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use support::Fixture;
 use weavatrix_scan::{
-    CancellationToken, ContentFileStatus, ContentVisitControl, ContentVisitEvent, ParallelExecutor,
-    ParallelJob, ParallelRuntime, ScanOptions, ScanTermination, Scanner,
+    CancellationToken, ChangedContentVisitOutcome, ContentFileStatus, ContentVisitControl,
+    ContentVisitEvent, ContentVisitMode, MultiScanner, ParallelExecutor, ParallelJob,
+    ParallelRuntime, ScanOptions, ScanTermination, Scanner, WatchPlan,
 };
 
 #[derive(Default)]
@@ -256,4 +257,228 @@ fn content_worker_submission_failure_is_fallible() {
         .visit_content(|_| |_| ContentVisitControl::Continue)
         .unwrap_err();
     assert!(error.to_string().contains("content executor busy"));
+}
+
+#[test]
+fn multi_scanner_content_visit_tags_roots_and_preserves_report_order() {
+    let first = Fixture::new("multi-content-first");
+    let second = Fixture::new("multi-content-second");
+    first.write("src/first.rs", "fn first() {}\n");
+    second.write("src/second.rs", "fn second() {}\n");
+    let observed = Arc::new(Mutex::new(BTreeMap::<usize, Vec<String>>::new()));
+    let options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .selected_files_only()
+        .with_traversal_parallelism(1)
+        .with_content_parallelism(2);
+
+    let report = MultiScanner::new(&first.root)
+        .add_root(&second.root)
+        .options(options.clone())
+        .with_root_parallelism(2)
+        .visit_content({
+            let observed = Arc::clone(&observed);
+            move |root_index, _worker_index| {
+                let observed = Arc::clone(&observed);
+                move |event| {
+                    if let ContentVisitEvent::FileStart { file, .. } = event {
+                        assert_eq!(file.root_index, root_index);
+                        observed
+                            .lock()
+                            .unwrap()
+                            .entry(root_index)
+                            .or_default()
+                            .push(file.relative.to_owned());
+                    }
+                    ContentVisitControl::Continue
+                }
+            }
+        })
+        .unwrap();
+
+    assert_eq!(report.len(), 2);
+    assert_eq!(report.reports[0].root, first.root.canonicalize().unwrap());
+    assert_eq!(report.reports[1].root, second.root.canonicalize().unwrap());
+    assert_eq!(
+        report.reports[0].revision,
+        Scanner::new(&first.root)
+            .options(options.clone())
+            .scan_compact()
+            .unwrap()
+            .revision
+    );
+    assert_eq!(
+        report.reports[1].revision,
+        Scanner::new(&second.root)
+            .options(options)
+            .scan_compact()
+            .unwrap()
+            .revision
+    );
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed[&0], ["src/first.rs"]);
+    assert_eq!(observed[&1], ["src/second.rs"]);
+}
+
+#[test]
+fn changed_content_visit_reads_only_safe_changed_paths() {
+    let fixture = Fixture::new("changed-content");
+    fixture.write("src/changed.rs", "fn changed() {}\n");
+    fixture.write("src/untouched.rs", "fn untouched() {}\n");
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let plan = WatchPlan {
+        changed: vec!["src/changed.rs".to_owned()],
+        removed: vec!["src/z-removed.rs".to_owned(), "src/a-removed.rs".to_owned()],
+        full_rescan: false,
+        rejected_events: 0,
+    };
+
+    let outcome = Scanner::new(&fixture.root)
+        .options(
+            ScanOptions::default()
+                .with_extensions(["rs"])
+                .selected_files_only()
+                .with_content_parallelism(2),
+        )
+        .visit_changed_content(&plan, {
+            let observed = Arc::clone(&observed);
+            move |_| {
+                let observed = Arc::clone(&observed);
+                move |event| {
+                    if let ContentVisitEvent::FileStart { file, .. } = event {
+                        observed.lock().unwrap().push(file.relative.to_owned());
+                    }
+                    ContentVisitControl::Continue
+                }
+            }
+        })
+        .unwrap();
+
+    let ChangedContentVisitOutcome::Visited(report) = outcome else {
+        panic!("safe file-only plan unexpectedly required a full scan");
+    };
+    assert_eq!(report.content.discovered, 1);
+    assert_eq!(report.content.completed, 1);
+    assert_eq!(report.content.cache.content_reads, 1);
+    assert_eq!(report.removed, ["src/a-removed.rs", "src/z-removed.rs"]);
+    assert_eq!(*observed.lock().unwrap(), ["src/changed.rs"]);
+}
+
+#[test]
+fn changed_content_visit_rejects_structural_plans_before_callbacks() {
+    let fixture = Fixture::new("changed-content-structural");
+    fixture.write("src/value.rs", "fn value() {}\n");
+    let factories = Arc::new(AtomicUsize::new(0));
+    let plan = WatchPlan {
+        changed: vec!["src".to_owned()],
+        removed: Vec::new(),
+        full_rescan: false,
+        rejected_events: 0,
+    };
+
+    let outcome = Scanner::new(&fixture.root)
+        .options(ScanOptions::default().with_extensions(["rs"]))
+        .visit_changed_content(&plan, {
+            let factories = Arc::clone(&factories);
+            move |_| {
+                factories.fetch_add(1, Ordering::Relaxed);
+                |_| ContentVisitControl::Continue
+            }
+        })
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        ChangedContentVisitOutcome::FullRescanRequired
+    ));
+    assert_eq!(factories.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn streaming_content_visit_omits_manifest_revision_but_keeps_byte_evidence() {
+    let fixture = Fixture::new("streaming-content");
+    fixture.write("src/a.rs", "fn a() {}\n");
+    fixture.write("src/b.rs", "fn b() {}\n");
+    let hashes = Arc::new(AtomicUsize::new(0));
+
+    let report = Scanner::new(&fixture.root)
+        .options(
+            ScanOptions::default()
+                .with_extensions(["rs"])
+                .selected_files_only()
+                .with_content_parallelism(2),
+        )
+        .visit_content_streaming({
+            let hashes = Arc::clone(&hashes);
+            move |_| {
+                let hashes = Arc::clone(&hashes);
+                move |event| {
+                    if let ContentVisitEvent::FileEnd {
+                        status: ContentFileStatus::Selected,
+                        content_hash: Some(_),
+                        ..
+                    } = event
+                    {
+                        hashes.fetch_add(1, Ordering::Relaxed);
+                    }
+                    ContentVisitControl::Continue
+                }
+            }
+        })
+        .unwrap();
+
+    assert_eq!(report.mode, ContentVisitMode::Streaming);
+    assert!(report.revision.is_empty());
+    assert_eq!(report.discovered, 2);
+    assert_eq!(report.completed, 2);
+    assert_eq!(report.cache.content_reads, 2);
+    assert_eq!(hashes.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn multi_scanner_quit_cancels_content_across_roots() {
+    let first = Fixture::new("multi-content-quit-first");
+    let second = Fixture::new("multi-content-quit-second");
+    for index in 0..32 {
+        first.write(&format!("src/first-{index:02}.rs"), vec![b'a'; 80_000]);
+        second.write(&format!("src/second-{index:02}.rs"), vec![b'b'; 80_000]);
+    }
+    let cancellation = CancellationToken::new();
+    let quit = Arc::new(AtomicBool::new(false));
+
+    let report = MultiScanner::new(&first.root)
+        .add_root(&second.root)
+        .with_root_parallelism(2)
+        .options(
+            ScanOptions::default()
+                .with_extensions(["rs"])
+                .selected_files_only()
+                .with_content_parallelism(2)
+                .with_cancellation(cancellation.clone()),
+        )
+        .visit_content_streaming({
+            let quit = Arc::clone(&quit);
+            move |_, _| {
+                let quit = Arc::clone(&quit);
+                move |_| {
+                    if quit.swap(true, Ordering::AcqRel) {
+                        ContentVisitControl::Continue
+                    } else {
+                        ContentVisitControl::Quit
+                    }
+                }
+            }
+        })
+        .unwrap();
+
+    assert!(cancellation.is_cancelled());
+    assert!(report.reports.iter().any(|root| root.stopped));
+    assert!(
+        report
+            .reports
+            .iter()
+            .map(|root| root.completed)
+            .sum::<u64>()
+            < 64
+    );
 }
