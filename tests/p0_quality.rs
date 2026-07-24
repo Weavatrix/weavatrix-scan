@@ -9,3 +9,5 @@ mod integrity;
 mod limits;
 #[path = "p0_quality/parallel.rs"]
 mod parallel;
+#[path = "p0_quality/portable_snapshot.rs"]
+mod portable_snapshot;

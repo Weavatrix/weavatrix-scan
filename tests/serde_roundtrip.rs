@@ -57,6 +57,28 @@ fn scan_report_round_trips_through_json() {
     let _ = std::fs::remove_dir_all(fixture);
 }
 
+#[test]
+fn portable_report_json_omits_private_paths_and_round_trips() {
+    let fixture =
+        std::env::temp_dir().join(format!("private-repository-name-{}", std::process::id()));
+    std::fs::create_dir_all(fixture.join("src")).unwrap();
+    std::fs::write(fixture.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    let report = Scanner::new(&fixture)
+        .options(ScanOptions::default().with_extensions(["rs"]))
+        .scan()
+        .unwrap();
+    let portable = report.to_portable();
+    let json = serde_json::to_string(&portable).unwrap();
+    let decoded: weavatrix_scan::PortableScanReport = serde_json::from_str(&json).unwrap();
+
+    assert!(!json.contains("private-repository-name"));
+    assert!(!json.contains("absolute"));
+    assert!(!json.contains("modified_ns"));
+    assert_eq!(portable, decoded);
+
+    let _ = std::fs::remove_dir_all(fixture);
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_report_paths_round_trip_losslessly() {

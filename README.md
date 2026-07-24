@@ -45,6 +45,8 @@ layers:
 | Directory callback / contents-first | Yes / Yes | Yes / Yes | Yes / Yes | Yes / No |
 | Named file types | Yes | Yes | No | No |
 | Stable normalized paths | Yes | No | No | Sorted traversal |
+| Path-safe portable report | Yes | No | No | No |
+| Snapshot-verified content provider | Yes | No | No | No |
 | File sizes and SHA-256 hashes | Yes | No | No | No |
 | Persistent incremental hash reuse | Yes | No | No | No |
 | Concurrent-mutation evidence | Yes | No | No | No |
@@ -257,6 +259,40 @@ With the `serde` feature, invalid native path units use a tagged byte/wide-unit
 representation and round-trip without loss; ordinary Unicode paths remain
 plain JSON strings.
 
+## Portable evidence and verified content
+
+Use `ScanReport::to_portable` before sending scan evidence to another process,
+writing public logs, or attaching it to an AI request. `PortableScanReport`
+omits the absolute root, absolute file paths, file identities, timestamps,
+cache statistics, and free-form diagnostic text. Repository-relative paths and
+typed skip kinds remain; diagnostic details are represented only by stable
+SHA-256 values. External ignore-source locations are removed. Its
+`selection_portable` field separately records whether host-level Git
+configuration affected file selection.
+
+Future content consumers such as Search or Clone can bind bytes back to the
+full local report:
+
+```rust
+use weavatrix_scan::{Scanner, SnapshotEvidence};
+
+let report = Scanner::new(".").scan()?;
+let portable = report.to_portable();
+let content = report
+    .content_provider()?
+    .read_bounded("src/lib.rs", 2 * 1024 * 1024)?;
+
+assert!(!portable.revision.is_empty());
+assert_eq!(content.evidence, SnapshotEvidence::Sha256);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`SnapshotContentProvider` accepts only sorted entries belonging to its report,
+rejects path escapes and symlinks, enforces an optional byte limit, and compares
+size plus native file-version evidence before and after reading. When a content
+hash exists, returned bytes must also match the recorded SHA-256. A missing or
+changed file produces typed `SnapshotReadError::Stale` evidence.
+
 ## Incremental consumers
 
 Two completed reports produce a stable changed-file set without filesystem
@@ -413,6 +449,8 @@ differential suite and competitor crates are dev-only.
 - caps selected file size before content reads;
 - rejects repository-local ignore-file symlinks and path traversal;
 - supports entry, total-byte, timeout, and cooperative cancellation bounds;
+- exports path-safe portable evidence without host paths or diagnostic text;
+- revalidates snapshot content before and after bounded consumer reads;
 - forbids unsafe Rust.
 
 The scanner is read-only. Concurrent filesystem changes between discovery and

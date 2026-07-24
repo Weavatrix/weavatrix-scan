@@ -3,6 +3,10 @@
 //! `weavatrix-scan` never executes repository code or reads outside the
 //! repository boundary. Symbolic links are skipped by default and guarded by
 //! boundary/cycle checks when explicitly enabled.
+//!
+//! Use [`ScanReport::to_portable`] to cross trust boundaries without exposing
+//! host paths, and [`ScanReport::content_provider`] to reopen selected content
+//! with snapshot verification.
 
 mod config;
 mod content;
@@ -20,11 +24,13 @@ mod path;
 #[cfg(feature = "serde")]
 mod path_serde;
 mod pool;
+mod portable_report;
 mod report;
 mod scan_finalize;
 mod scan_limits;
 mod scan_match;
 mod scanner;
+mod snapshot;
 mod walk_builder;
 mod walk_iter;
 mod walk_platform;
@@ -41,11 +47,16 @@ pub use ignore::{IgnoreFile, RepositoryMatch, RepositoryMatcher};
 pub use parallel::{
     ParallelVisitReport, ParallelWalkReport, ParallelWalker, WalkControl, WalkEvent,
 };
+pub use portable_report::{
+    PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
+    PortableSkippedEntry,
+};
 pub use report::{
     FileIdentity, FileVersion, IgnoreSourceEvidence, IgnoreSourceKind, ScanCacheStats, ScanReport,
     ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
 };
 pub use scanner::{Scanner, scan_repository};
+pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
 pub use walk_builder::{MultiWalker, WalkBuilder};
 pub use walker::{
     ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, WalkSkipReason, Walker,

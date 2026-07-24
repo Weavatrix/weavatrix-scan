@@ -18,6 +18,10 @@ All notable changes to this project are documented here.
   small-tree, and privacy-safe real-repository benchmark profiles.
 - Raise the Windows collected-walker ceiling while bounding shallow frontier
   expansion, improving broad and skewed traversal without a small-tree penalty.
+- Add `PortableScanReport` with host-path, file-identity, and free-form
+  diagnostic redaction plus a root-independent portable revision.
+- Add `SnapshotContentProvider` with path-scope validation, bounded reads,
+  before/after file-version checks, and optional SHA-256 verification.
 - Add multi-root `WalkBuilder`, native custom sorting, directory/entry
   callbacks, contents-first ordering, and named scanner file types.
 
