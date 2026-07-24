@@ -58,5 +58,5 @@ All notable changes to this project are documented here.
 - Reuse inherited ignore rules, index exact literals, specialize common globs,
   and prefilter complex patterns.
 - Stream no-ignore traversal and sort only the final deterministic report.
-- Verify exact selected-path parity on Rust, Go, JavaScript, TypeScript,
-  Analytics, and Python repositories.
+- Verify exact selected-path parity on mixed-language repositories without
+  publishing repository identities or paths.
