@@ -9,6 +9,7 @@ use weavatrix_scan::{ParallelWalker, ScanOptions, Scanner, WalkEntry, WalkOption
 
 fn main() {
     let skewed = StressFixture::skewed();
+    let small = StressFixture::small();
     let first_touch = Instant::now();
     let first_count = parallel_files(&skewed.root).len();
     println!(
@@ -16,9 +17,45 @@ fn main() {
         first_touch.elapsed().as_secs_f64() * 1_000.0
     );
     benchmark_skewed(&skewed);
+    benchmark_small_parallel(&small);
+    benchmark_small_scanner(&small);
     benchmark_deep(&StressFixture::deep());
     benchmark_large_incremental(&StressFixture::large());
     benchmark_bounded_handles(&skewed);
+}
+
+fn benchmark_small_parallel(fixture: &StressFixture) {
+    let expected = serial_files(&fixture.root);
+    let mut cases = vec![
+        BenchmarkCase::new("weavatrix-parallel", || {
+            checked(&parallel_files(&fixture.root), &expected)
+        }),
+        BenchmarkCase::new("weavatrix-parallel-8", || {
+            checked(&parallel_files_with_workers(&fixture.root, 8), &expected)
+        }),
+        BenchmarkCase::new("weavatrix-parallel-16", || {
+            checked(&parallel_files_with_workers(&fixture.root, 16), &expected)
+        }),
+    ];
+    let results = measure_group(&mut cases);
+    for (case, result) in cases.iter().zip(results) {
+        print_measurement("small-raw", case.name, &result);
+    }
+}
+
+fn benchmark_small_scanner(fixture: &StressFixture) {
+    let expected = scan_files(&fixture.root, 1);
+    let mut cases = vec![
+        BenchmarkCase::new("weavatrix-scan-serial", || scan_files(&fixture.root, 1)),
+        BenchmarkCase::new("weavatrix-scan-4", || scan_files(&fixture.root, 4)),
+        BenchmarkCase::new("weavatrix-scan-8", || scan_files(&fixture.root, 8)),
+        BenchmarkCase::new("weavatrix-scan-16", || scan_files(&fixture.root, 16)),
+    ];
+    let results = measure_group(&mut cases);
+    for (case, result) in cases.iter().zip(results) {
+        assert_eq!(result.count, expected);
+        print_measurement("small-scan", case.name, &result);
+    }
 }
 
 fn benchmark_skewed(fixture: &StressFixture) {
@@ -26,6 +63,12 @@ fn benchmark_skewed(fixture: &StressFixture) {
     let mut cases = vec![
         BenchmarkCase::new("weavatrix-parallel", || {
             checked(&parallel_files(&fixture.root), &expected)
+        }),
+        BenchmarkCase::new("weavatrix-parallel-8", || {
+            checked(&parallel_files_with_workers(&fixture.root, 8), &expected)
+        }),
+        BenchmarkCase::new("weavatrix-parallel-16", || {
+            checked(&parallel_files_with_workers(&fixture.root, 16), &expected)
         }),
         BenchmarkCase::new("jwalk", || checked(&jwalk_files(&fixture.root), &expected)),
         BenchmarkCase::new("walkdir", || {
@@ -115,16 +158,21 @@ fn serial_files(root: &Path) -> Paths {
 }
 
 fn parallel_files(root: &Path) -> Paths {
-    sorted(
-        root,
-        ParallelWalker::new(root)
-            .walk()
-            .unwrap()
-            .entries
-            .into_iter()
-            .filter(WalkEntry::is_file)
-            .map(|entry| entry.path().to_path_buf()),
-    )
+    parallel_files_with_workers(root, 0)
+}
+
+fn parallel_files_with_workers(root: &Path, workers: usize) -> Paths {
+    let mut files = ParallelWalker::new(root)
+        .with_parallelism(workers)
+        .walk()
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(WalkEntry::is_file)
+        .map(|entry| entry.relative_path().to_path_buf())
+        .collect::<Vec<_>>();
+    files.sort_unstable();
+    files
 }
 
 fn jwalk_files(root: &Path) -> Paths {
@@ -149,6 +197,21 @@ fn walkdir_files(root: &Path) -> Paths {
             .filter(|entry| entry.file_type().is_file())
             .map(walkdir::DirEntry::into_path),
     )
+}
+
+fn scan_files(root: &Path, workers: usize) -> usize {
+    Scanner::new(root)
+        .options(
+            ScanOptions::default()
+                .with_extensions(["rs"])
+                .metadata_only()
+                .selected_files_only()
+                .with_parallelism(workers),
+        )
+        .scan()
+        .unwrap()
+        .files
+        .len()
 }
 
 fn sorted(root: &Path, files: impl Iterator<Item = PathBuf>) -> Paths {
@@ -180,6 +243,19 @@ impl StressFixture {
             for file in 0..40 {
                 fixture.write(
                     &format!("single/module_{directory:02}/file_{file:02}.rs"),
+                    b"fn run() {}\n",
+                );
+            }
+        }
+        fixture
+    }
+
+    fn small() -> Self {
+        let fixture = Self::new("weavatrix-bench-small");
+        for directory in 0..4 {
+            for file in 0..8 {
+                fixture.write(
+                    &format!("src/module_{directory}/file_{file}.rs"),
                     b"fn run() {}\n",
                 );
             }

@@ -74,7 +74,8 @@ impl ParallelWalker {
             return Err(shallow.errors.into_iter().next().expect("error exists"));
         }
         if !self.options.same_file_system && shallow.tasks.len() < 2 {
-            let target = requested_workers(self.parallelism, self.options.max_open);
+            let target = requested_workers(self.parallelism, self.options.max_open)
+                .min(FRONTIER_TARGET_TASKS);
             shallow = expand_frontier(shallow, self.options, target);
         }
         if shallow.tasks.is_empty() {
@@ -155,5 +156,7 @@ fn requested_workers(parallelism: usize, max_open: usize) -> usize {
 }
 
 const fn default_traversal_workers() -> usize {
-    if cfg!(windows) { 4 } else { 8 }
+    if cfg!(windows) { 16 } else { 8 }
 }
+
+const FRONTIER_TARGET_TASKS: usize = 4;

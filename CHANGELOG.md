@@ -15,7 +15,9 @@ All notable changes to this project are documented here.
 - Integrate adaptive parallel traversal into `Scanner`, add dynamic work below
   narrow roots, and retain low-overhead lanes on broad trees.
 - Add first-touch, skewed, deep, bounded-handle, large-content, incremental,
-  and real-Weavatrix benchmark profiles.
+  small-tree, and privacy-safe real-repository benchmark profiles.
+- Raise the Windows collected-walker ceiling while bounding shallow frontier
+  expansion, improving broad and skewed traversal without a small-tree penalty.
 - Add multi-root `WalkBuilder`, native custom sorting, directory/entry
   callbacks, contents-first ordering, and named scanner file types.
 
@@ -75,5 +77,5 @@ All notable changes to this project are documented here.
 - Reuse inherited ignore rules, index exact literals, specialize common globs,
   and prefilter complex patterns.
 - Stream no-ignore traversal and sort only the final deterministic report.
-- Verify exact selected-path parity on Rust, Go, JavaScript, TypeScript,
-  Analytics, and Python repositories.
+- Verify exact selected-path parity on mixed-language repositories without
+  publishing repository identities or paths.

@@ -54,12 +54,25 @@ layers:
 | Typed skip reasons and warnings | Yes | No | No | No |
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
 | Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
+| Parallel pull iterator | No (callback API) | No (callback API) | No | Yes |
+| Parallel multi-root traversal | No | Yes | No | No |
+| Stateful per-directory callback | No | No | No | Yes |
+| Separate root-symlink policy | No | No | Yes | No |
 | Cancellation and whole-scan budgets | Yes | Quit only | No | No |
 | Minimum depth / hidden policy | Yes / Yes | Yes / Yes | Yes / No | Yes / Yes |
 | Default runtime dependencies | 0 Unix / 1 Windows | Multiple | 2 platform helpers | Rayon stack |
 
 Use `Walker` when you only need paths. Use `Scanner` when downstream results
 must be reproducible and explainable.
+
+The remaining `No` cells are API-shape differences rather than scanner
+correctness gaps. `jwalk` uniquely offers a parallel pull iterator and mutable
+per-directory state, `ignore` can share one parallel traversal across multiple
+roots, and `walkdir` exposes a separate root-symlink switch. Weavatrix currently
+uses a callback for parallel streaming, parallelizes one repository root at a
+time, and canonicalizes the configured root. These are candidates for later API
+work, but do not weaken deterministic manifests, ignore selection, or safety
+evidence.
 
 ## Install
 
@@ -448,23 +461,24 @@ Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 11.7 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 8.6 ms |
-| Raw paths | ignore | 6,004 | 16.4 ms |
-| Raw paths | walkdir | 6,004 | 15.3 ms |
-| Raw paths | jwalk | 6,004 | 9.8 ms |
-| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 30.1 ms |
-| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 18.6 ms |
-| Ignore-aware manifest | ignore | 6,001 | 34.8 ms |
-| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 122.6 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 8.3 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 5.8 ms |
+| Raw paths | ignore | 6,004 | 9.6 ms |
+| Raw paths | walkdir | 6,004 | 9.2 ms |
+| Raw paths | jwalk | 6,004 | 7.5 ms |
+| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 31.5 ms |
+| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 18.8 ms |
+| Ignore-aware manifest | ignore | 6,001 | 37.4 ms |
+| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 123.5 ms |
 
-Each row is the median of 11 interleaved output-equivalent samples after two
-warmups. On this run `ParallelWalker` was 12.1% faster than `jwalk`; the
-parallel selected-manifest `Scanner` was 46.7% faster than `ignore`. The rich
-row additionally reads content, detects binaries, computes SHA-256 hashes,
-captures snapshot evidence, and records typed exclusions. Absolute timings
-vary by filesystem, cache, antivirus, CPU, and operating system; the benchmark
-workflow reruns the same checks on Ubuntu, Windows, and macOS.
+Each row is the median of five independent process medians. Every process runs
+11 interleaved output-equivalent samples after two warmups. On this measurement
+`ParallelWalker` was 23.2% faster than `jwalk`; the parallel
+selected-manifest `Scanner` was 49.7% faster than `ignore`. The rich row
+additionally reads content, detects binaries, computes SHA-256 hashes, captures
+snapshot evidence, and records typed exclusions. Absolute timings vary by
+filesystem, cache, antivirus, CPU, and operating system; the benchmark workflow
+reruns the same checks on Ubuntu, Windows, and macOS.
 
 Source review explains the remaining differences:
 
@@ -474,24 +488,20 @@ Source review explains the remaining differences:
   matchers;
 - Weavatrix `Walker` streams iterative DFS, bounds live handles and buffers the
   oldest remaining frame only when `max_open` is reached;
-- Weavatrix `ParallelWalker` expands shallow frontiers for skewed roots, uses
-  bounded lanes for broad work, and keeps report order independent of worker
-  completion;
+- Weavatrix `ParallelWalker` expands a small shallow frontier for narrow roots,
+  then uses up to 16 Windows or 8 Unix workers without serially over-expanding
+  small trees; bounded lanes keep report order independent of worker completion;
 - Weavatrix `Scanner` reuses inherited rules, indexes exact literals,
   specializes prefix/suffix globs, prefilters complex patterns, and sorts only
   the final report.
 
-Exact-path real-repository sample:
-
-| Repository | Files | weavatrix-scan | ignore |
-| --- | ---: | ---: | ---: |
-| Weavatrix Git checkout | 419 | 30.5 ms | 31.6 ms |
-
-The real benchmark first asserts the exact same sorted
-`(normalized path, bytes)` manifest. The stress profile also measured a
-skewed raw tree at 4.4 ms (`ParallelWalker`), 3.3 ms (`jwalk`), and 4.6 ms
-(`walkdir`), while an unchanged 12 MiB SHA-256 manifest fell from 61.7 ms full
-scan to 0.9 ms with incremental hash reuse. Treat these as reproducible
+The optional real-repository benchmark keeps repository identities and paths
+local; published documentation records only synthetic corpus results. It first
+asserts the exact same sorted `(normalized path, bytes)` manifest. The stress
+profile also measured a
+skewed raw tree at 3.2 ms (`ParallelWalker`), 3.4 ms (`jwalk`), and 4.7 ms
+(`walkdir`), while an unchanged 12 MiB SHA-256 manifest fell from 48.6 ms full
+scan to 0.7 ms with incremental hash reuse. Treat these as reproducible
 samples, not universal constants.
 
 ## Correctness checks
