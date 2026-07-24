@@ -45,6 +45,10 @@ harness = false
 name = "stress_profiles"
 harness = false
 
+[[bench]]
+name = "p2_apis"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 

@@ -72,7 +72,7 @@ impl ScanCache {
     {
         let paths = relative_paths
             .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<std::collections::HashSet<_>>();
         let before = self.entries.len();
         self.entries
             .retain(|entry| !paths.contains(entry.relative.as_str()));

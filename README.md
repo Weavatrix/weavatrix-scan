@@ -50,6 +50,7 @@ layers:
 | Snapshot-verified content provider | Yes | No | No | No |
 | File sizes and SHA-256 hashes | Yes | No | No | No |
 | Versioned compact incremental cache | Yes | No | No | No |
+| Watcher events to deterministic cache plan | Yes | No | No | No |
 | Concurrent-mutation evidence | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
 | Typed manifest delta / rename evidence | Yes | No | No | No |
@@ -224,11 +225,15 @@ joins its coordinator:
 ```rust
 use weavatrix_scan::ParallelWalker;
 
-for entry in ParallelWalker::new(".").into_iter_bounded(64) {
+for entry in ParallelWalker::new(".").into_iter_bounded(1024) {
     println!("{}", entry?.path().display());
 }
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
+
+Larger bounded buffers improve throughput without changing the memory bound.
+Very small capacities are useful when minimum buffered state matters more than
+raw traversal speed.
 
 ## Scan modes
 
@@ -552,6 +557,12 @@ profiles:
 cargo bench --locked --bench stress_profiles
 ```
 
+Run root-policy, stateful-callback, bounded-pull, and watcher-adapter profiles:
+
+```sh
+cargo bench --locked --bench p2_apis
+```
+
 The synthetic comparison uses 6,000 source files across Rust, Go, and
 TypeScript in 80 sibling directories. It runs two warmups and 11 interleaved
 measured samples, then reports the median. Raw walkers must produce the same
@@ -581,6 +592,15 @@ additionally reads content, detects binaries, computes SHA-256 hashes, captures
 snapshot evidence, and records typed exclusions. Absolute timings vary by
 filesystem, cache, antivirus, CPU, and operating system; the benchmark workflow
 reruns the same checks on Ubuntu, Windows, and macOS.
+
+The P2 API benchmark uses the same corpus and methodology. A separate Windows
+sample measured the bounded pull iterator at 8.2 ms with capacity 1,024 versus
+8.0 ms for `jwalk`; capacity 64 measured 10.2 ms. The stateful directory
+callback was indistinguishable from the stateless callback within run-to-run
+noise, and changing the normal-root symlink policy added no measurable
+traversal cost. Coalescing 1,024 watcher events into a deterministic plan took
+1.3 ms; planning plus invalidating a 6,000-entry cache took 2.7 ms. These are
+median-of-five process medians, not single best runs.
 
 Source review explains the remaining differences:
 

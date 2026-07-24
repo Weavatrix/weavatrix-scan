@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 mod worker;
 
-use worker::{worker, worker_count};
+use worker::{stream_worker, worker, worker_count};
 
 struct DirectoryTask {
     path: PathBuf,
@@ -96,6 +96,79 @@ where
     F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Send + Sync + 'static,
 {
     run_batched(root, options, parallelism, cancellation, visitor)
+}
+
+pub(crate) fn stream_batched<F>(
+    root: &Path,
+    options: WalkOptions,
+    parallelism: usize,
+    cancellation: &CancellationToken,
+    visitor: F,
+) -> Result<ParallelVisitReport, WalkError>
+where
+    F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool + Send + Sync + 'static,
+{
+    let (parallel_root, root_file_system, root_entry) = prepare_root(root, options)?;
+    let root_can_descend = root_entry.skip_reason().is_none();
+    let root_visible = root_entry.depth() >= options.min_depth;
+    let mut visited = u64::from(root_visible);
+    let mut keep_going = true;
+    if !cancellation.is_cancelled() && root_visible {
+        keep_going = visitor(vec![root_entry], &[]);
+    }
+    let descend = !cancellation.is_cancelled() && root_can_descend && keep_going;
+    if !descend {
+        return Ok(ParallelVisitReport {
+            visited,
+            errors: Vec::new(),
+            quit: !keep_going,
+            cancelled: cancellation.is_cancelled(),
+        });
+    }
+
+    let shared = initial_state(&parallel_root, visited);
+    let visitor = Arc::new(visitor);
+    let cancellation = cancellation.clone();
+    let worker_count = worker_count(parallelism, options.max_open);
+    let (sender, receiver) = mpsc::channel();
+    for _ in 0..worker_count {
+        let shared = Arc::clone(&shared);
+        let visitor = Arc::clone(&visitor);
+        let root = Arc::clone(&parallel_root);
+        let cancellation = cancellation.clone();
+        let sender = sender.clone();
+        ThreadPool::global().execute(move || {
+            stream_worker(
+                &shared,
+                &root,
+                root_file_system,
+                options,
+                &cancellation,
+                visitor.as_ref(),
+            );
+            let _ = sender.send(());
+        });
+    }
+    drop(sender);
+    for () in receiver {}
+
+    let shared = Arc::try_unwrap(shared)
+        .ok()
+        .expect("dynamic traversal workers released shared state");
+    let mut state = shared
+        .state
+        .into_inner()
+        .expect("dynamic traversal state is not poisoned");
+    if options.error_policy == ErrorPolicy::Abort && !state.errors.is_empty() {
+        return Err(state.errors.remove(0));
+    }
+    visited = state.visited;
+    Ok(ParallelVisitReport {
+        visited,
+        errors: state.errors,
+        quit: state.quit,
+        cancelled: cancellation.is_cancelled(),
+    })
 }
 
 fn run_batched<F>(

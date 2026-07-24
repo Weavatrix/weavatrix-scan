@@ -1,7 +1,7 @@
 use crate::config::ScanOptions;
 use crate::error::{Error, Result};
 use crate::path::normalized_relative_path;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 /// Normalized watcher event category independent of a watcher implementation.
@@ -53,6 +53,7 @@ impl WatchPlan {
 /// Converts watcher-specific path notifications into scanner cache work.
 pub struct WatcherEventAdapter {
     root: PathBuf,
+    event_root: PathBuf,
     ignore_files: BTreeSet<String>,
 }
 
@@ -69,6 +70,13 @@ impl WatcherEventAdapter {
         S: AsRef<str>,
     {
         let requested = root.as_ref();
+        let event_root = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|source| Error::io(requested, source))?
+                .join(requested)
+        };
         let root = requested
             .canonicalize()
             .map_err(|source| Error::io(requested, source))?;
@@ -77,6 +85,7 @@ impl WatcherEventAdapter {
         }
         Ok(Self {
             root,
+            event_root,
             ignore_files: ignore_files
                 .into_iter()
                 .map(|name| name.as_ref().replace('\\', "/"))
@@ -99,8 +108,8 @@ impl WatcherEventAdapter {
     where
         I: IntoIterator<Item = WatchEvent>,
     {
-        let mut changed = BTreeSet::new();
-        let mut removed = BTreeSet::new();
+        let mut changed = HashSet::new();
+        let mut removed = HashSet::new();
         let mut full_rescan = false;
         let mut rejected_events = 0_u64;
 
@@ -135,9 +144,13 @@ impl WatcherEventAdapter {
             }
         }
 
+        let mut changed = changed.into_iter().collect::<Vec<_>>();
+        let mut removed = removed.into_iter().collect::<Vec<_>>();
+        changed.sort_unstable();
+        removed.sort_unstable();
         WatchPlan {
-            changed: changed.into_iter().collect(),
-            removed: removed.into_iter().collect(),
+            changed,
+            removed,
             full_rescan,
             rejected_events,
         }
@@ -145,7 +158,9 @@ impl WatcherEventAdapter {
 
     fn relative(&self, path: &Path) -> Option<String> {
         let relative = if path.is_absolute() {
-            strip_root(path, &self.root)?
+            strip_root(path, &self.event_root)
+                .or_else(|| strip_root(path, &self.root))
+                .or_else(|| strip_canonical_root(path, &self.root))?
         } else {
             path.to_path_buf()
         };
@@ -182,26 +197,32 @@ fn strip_root(path: &Path, root: &Path) -> Option<PathBuf> {
     if let Ok(relative) = path.strip_prefix(root) {
         return Some(relative.to_path_buf());
     }
+    #[cfg(windows)]
+    if let Some(relative) = strip_windows_root(path, root) {
+        return Some(relative);
+    }
+    None
+}
+
+fn strip_canonical_root(path: &Path, root: &Path) -> Option<PathBuf> {
     if let Ok(canonical) = path.canonicalize()
         && let Ok(relative) = canonical.strip_prefix(root)
     {
         return Some(relative.to_path_buf());
     }
-    #[cfg(windows)]
-    {
-        let mut path_components = path.components();
-        for root_component in root.components() {
-            let path_component = path_components.next()?;
-            if !windows_component_eq(path_component, root_component) {
-                return None;
-            }
+    None
+}
+
+#[cfg(windows)]
+fn strip_windows_root(path: &Path, root: &Path) -> Option<PathBuf> {
+    let mut path_components = path.components();
+    for root_component in root.components() {
+        let path_component = path_components.next()?;
+        if !windows_component_eq(path_component, root_component) {
+            return None;
         }
-        Some(path_components.collect())
     }
-    #[cfg(not(windows))]
-    {
-        None
-    }
+    Some(path_components.collect())
 }
 
 #[cfg(windows)]

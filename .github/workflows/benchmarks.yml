@@ -29,3 +29,5 @@ jobs:
         run: cargo +stable bench --locked --bench compare_competitors
       - name: Exercise skewed, deep, bounded, and incremental profiles
         run: cargo +stable bench --locked --bench stress_profiles
+      - name: Exercise P2 traversal and watcher APIs
+        run: cargo +stable bench --locked --bench p2_apis

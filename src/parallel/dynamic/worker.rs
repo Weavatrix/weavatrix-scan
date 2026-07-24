@@ -22,6 +22,22 @@ pub(super) fn worker<F>(
     }
 }
 
+pub(super) fn stream_worker<F>(
+    shared: &Shared,
+    root: &Arc<PathBuf>,
+    root_file_system: Option<FileSystemId>,
+    options: WalkOptions,
+    cancellation: &CancellationToken,
+    visitor: &F,
+) where
+    F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool + Sync,
+{
+    while let Some(task) = next_task(shared, cancellation) {
+        let report = stream_directory(task, root, root_file_system, options, cancellation, visitor);
+        finish_task(shared, report, options.error_policy, cancellation);
+    }
+}
+
 fn next_task(shared: &Shared, cancellation: &CancellationToken) -> Option<DirectoryTask> {
     let mut state = shared
         .state
@@ -86,6 +102,71 @@ where
         }
     }
     report_for(&entries, errors, task.depth, options, visitor)
+}
+
+fn stream_directory<F>(
+    task: DirectoryTask,
+    root: &Arc<PathBuf>,
+    root_file_system: Option<FileSystemId>,
+    options: WalkOptions,
+    cancellation: &CancellationToken,
+    visitor: &F,
+) -> TaskReport
+where
+    F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool + Sync,
+{
+    let mut worker_options = options;
+    worker_options.error_policy = ErrorPolicy::Continue;
+    worker_options.min_depth = 0;
+    worker_options.max_open = 1;
+    let mut walker = Walker::from_known_directory(
+        root,
+        task.path,
+        task.depth,
+        worker_options,
+        root_file_system,
+    );
+    let mut entries = Vec::new();
+    let mut errors = Vec::new();
+    while !cancellation.is_cancelled() {
+        let Some(item) = walker.next() else {
+            break;
+        };
+        match item {
+            Ok(entry) => {
+                if entry.is_dir() {
+                    walker.skip_current_dir();
+                }
+                entries.push(entry);
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    let visible = task.depth.saturating_add(1) >= options.min_depth;
+    let visited = if visible {
+        u64::try_from(entries.len()).unwrap_or(u64::MAX)
+    } else {
+        0
+    };
+    let directories = entries
+        .iter()
+        .filter(|entry| entry.is_dir() && entry.skip_reason().is_none())
+        .map(|entry| DirectoryTask {
+            path: entry.path().to_path_buf(),
+            depth: entry.depth(),
+        })
+        .collect();
+    let keep_going = if visible || !errors.is_empty() {
+        visitor(if visible { entries } else { Vec::new() }, &errors)
+    } else {
+        true
+    };
+    TaskReport {
+        directories,
+        errors,
+        visited,
+        quit: !keep_going,
+    }
 }
 
 fn report_for<F>(
