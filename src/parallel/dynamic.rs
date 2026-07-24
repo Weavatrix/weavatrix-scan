@@ -1,9 +1,10 @@
 use super::visit::{ParallelVisitReport, WalkControl, WalkEvent};
 use crate::control::CancellationToken;
 use crate::pool::ThreadPool;
+use crate::walk_platform::DirectoryIdentity;
 use crate::walk_platform::FileSystemId;
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -15,6 +16,8 @@ use worker::{stream_worker, worker, worker_count};
 struct DirectoryTask {
     path: PathBuf,
     depth: usize,
+    identity: Option<DirectoryIdentity>,
+    ancestors: Arc<HashSet<DirectoryIdentity>>,
 }
 
 struct SharedState {
@@ -117,6 +120,7 @@ where
     }
     let (parallel_root, root_file_system, root_entry) = prepare_root(root, options)?;
     let root_can_descend = root_entry.skip_reason().is_none();
+    let root_identity = root_entry.directory_identity();
     let root_visible = root_entry.depth() >= options.min_depth;
     let mut visited = u64::from(root_visible);
     let mut keep_going = true;
@@ -133,7 +137,7 @@ where
         });
     }
 
-    let shared = initial_state(&parallel_root, visited);
+    let shared = initial_state(&parallel_root, visited, root_identity);
     let visitor = Arc::new(visitor);
     let cancellation = cancellation.clone();
     let worker_count = worker_count(parallelism, options.max_open);
@@ -204,6 +208,7 @@ where
     F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Send + Sync + 'static,
 {
     let (parallel_root, root_file_system, root_entry) = prepare_root(root, options)?;
+    let root_identity = root_entry.directory_identity();
     let mut visited = 0_u64;
     let mut root_control = WalkControl::Continue;
     if !cancellation.is_cancelled() && root_entry.depth() >= options.min_depth {
@@ -230,7 +235,7 @@ where
         });
     }
 
-    let shared = initial_state(&parallel_root, visited);
+    let shared = initial_state(&parallel_root, visited, root_identity);
     let visitor = Arc::new(visitor);
     let cancellation = cancellation.clone();
     let worker_count = worker_count(parallelism, options.max_open);
@@ -302,12 +307,22 @@ fn prepare_root(
     Ok((parallel_root, root_file_system, entry))
 }
 
-fn initial_state(root: &Arc<PathBuf>, visited: u64) -> Arc<Shared> {
+fn initial_state(
+    root: &Arc<PathBuf>,
+    visited: u64,
+    root_identity: Option<DirectoryIdentity>,
+) -> Arc<Shared> {
+    let mut ancestors = HashSet::new();
+    if let Some(identity) = root_identity {
+        ancestors.insert(identity);
+    }
     Arc::new(Shared {
         state: Mutex::new(SharedState {
             queue: VecDeque::from([DirectoryTask {
                 path: root.as_ref().clone(),
                 depth: 0,
+                identity: root_identity,
+                ancestors: Arc::new(ancestors),
             }]),
             active: 0,
             stopped: false,

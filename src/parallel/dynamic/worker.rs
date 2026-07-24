@@ -82,16 +82,20 @@ fn visit_directory<F>(
 where
     F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Sync,
 {
+    let parent_depth = task.depth;
+    let ancestors = Arc::clone(&task.ancestors);
     let mut worker_options = options;
     worker_options.error_policy = ErrorPolicy::Continue;
     worker_options.min_depth = 0;
     worker_options.max_open = 1;
-    let mut walker = Walker::from_known_directory(
+    let mut walker = Walker::from_known_directory_with_ancestry(
         root,
         task.path,
         task.depth,
         worker_options,
         root_file_system,
+        task.identity,
+        task.ancestors.as_ref().clone(),
     );
     let mut entries = Vec::new();
     let mut errors = Vec::new();
@@ -109,7 +113,7 @@ where
             Err(error) => errors.push(error),
         }
     }
-    report_for(&entries, errors, task.depth, options, visitor)
+    report_for(&entries, errors, parent_depth, &ancestors, options, visitor)
 }
 
 fn stream_directory<F>(
@@ -123,16 +127,20 @@ fn stream_directory<F>(
 where
     F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool + Sync,
 {
+    let parent_depth = task.depth;
+    let ancestors = Arc::clone(&task.ancestors);
     let mut worker_options = options;
     worker_options.error_policy = ErrorPolicy::Continue;
     worker_options.min_depth = 0;
     worker_options.max_open = 1;
-    let mut walker = Walker::from_known_directory(
+    let mut walker = Walker::from_known_directory_with_ancestry(
         root,
         task.path,
         task.depth,
         worker_options,
         root_file_system,
+        task.identity,
+        task.ancestors.as_ref().clone(),
     );
     let mut entries = Vec::new();
     let mut errors = Vec::new();
@@ -150,7 +158,7 @@ where
             Err(error) => errors.push(error),
         }
     }
-    let visible = task.depth.saturating_add(1) >= options.min_depth;
+    let visible = parent_depth.saturating_add(1) >= options.min_depth;
     let visited = if visible {
         u64::try_from(entries.len()).unwrap_or(u64::MAX)
     } else {
@@ -159,10 +167,7 @@ where
     let directories = entries
         .iter()
         .filter(|entry| entry.is_dir() && entry.skip_reason().is_none())
-        .map(|entry| DirectoryTask {
-            path: entry.path().to_path_buf(),
-            depth: entry.depth(),
-        })
+        .map(|entry| child_task(entry, &ancestors))
         .collect();
     let keep_going = if visible || !errors.is_empty() {
         visitor(if visible { entries } else { Vec::new() }, &errors)
@@ -181,6 +186,7 @@ fn report_for<F>(
     entries: &[WalkEntry],
     errors: Vec<WalkError>,
     parent_depth: usize,
+    ancestors: &Arc<std::collections::HashSet<crate::walk_platform::DirectoryIdentity>>,
     options: WalkOptions,
     visitor: &F,
 ) -> TaskReport
@@ -209,10 +215,7 @@ where
                 && **control == super::WalkControl::Continue
                 && !decision.quit
         })
-        .map(|(entry, _)| DirectoryTask {
-            path: entry.path().to_path_buf(),
-            depth: entry.depth(),
-        })
+        .map(|(entry, _)| child_task(entry, ancestors))
         .collect();
     let abort = options.error_policy == ErrorPolicy::Abort && !errors.is_empty();
     TaskReport {
@@ -224,6 +227,27 @@ where
             0
         },
         quit: decision.quit || abort,
+    }
+}
+
+fn child_task(
+    entry: &WalkEntry,
+    ancestors: &Arc<std::collections::HashSet<crate::walk_platform::DirectoryIdentity>>,
+) -> DirectoryTask {
+    let identity = entry.directory_identity();
+    let ancestors = identity.map_or_else(
+        || Arc::clone(ancestors),
+        |identity| {
+            let mut child = ancestors.as_ref().clone();
+            child.insert(identity);
+            Arc::new(child)
+        },
+    );
+    DirectoryTask {
+        path: entry.path().to_path_buf(),
+        depth: entry.depth(),
+        identity,
+        ancestors,
     }
 }
 

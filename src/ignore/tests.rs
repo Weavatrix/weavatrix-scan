@@ -1,4 +1,4 @@
-use super::parser::parse_rule;
+use super::parser::{parse_file_bytes, parse_rule};
 use super::*;
 
 #[test]
@@ -14,6 +14,67 @@ fn preserves_escaped_trailing_spaces() {
     let rule = parse_rule(r"name\ ", false).unwrap().unwrap();
     assert!(rule.matcher.matches(&rule.pattern, "name "));
     assert!(!rule.matcher.matches(&rule.pattern, "name"));
+}
+
+#[test]
+fn arbitrary_gitignore_grammar_is_panic_free_and_deterministic() {
+    let cases = std::env::var("WEAVATRIX_FUZZ_CASES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(4_096)
+        .min(1_000_000);
+    for seed in 0..cases {
+        let mut state = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let length = usize::try_from(next_fuzz(&mut state) % 384).unwrap();
+        let mut input = Vec::with_capacity(length);
+        for _ in 0..length {
+            input.push(next_fuzz(&mut state).to_le_bytes()[0]);
+        }
+        let mut first = RuleSet::default();
+        let mut first_errors = Vec::new();
+        parse_file_bytes(
+            Path::new("fuzz/.gitignore"),
+            &input,
+            seed % 2 == 0,
+            &mut first,
+            &mut first_errors,
+        );
+        let mut second = RuleSet::default();
+        let mut second_errors = Vec::new();
+        parse_file_bytes(
+            Path::new("fuzz/.gitignore"),
+            &input,
+            seed % 2 == 0,
+            &mut second,
+            &mut second_errors,
+        );
+        assert_eq!(first.rules.len(), second.rules.len(), "seed {seed}");
+        assert_eq!(first_errors.len(), second_errors.len(), "seed {seed}");
+
+        let candidate = format!(
+            "nested/{:016x}/candidate-{}.rs",
+            next_fuzz(&mut state),
+            seed % 17
+        );
+        assert_eq!(
+            first.matches(&candidate, seed % 3 == 0).map(rule_action),
+            second.matches(&candidate, seed % 3 == 0).map(rule_action),
+            "seed {seed}"
+        );
+    }
+}
+
+const fn next_fuzz(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+const fn rule_action(matched: RuleMatch) -> RuleAction {
+    match matched {
+        RuleMatch::Exact(action) | RuleMatch::Ancestor(action) => action,
+    }
 }
 
 #[test]

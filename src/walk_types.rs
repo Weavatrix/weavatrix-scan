@@ -1,4 +1,5 @@
 use crate::report::FileVersion;
+use crate::walk_platform::DirectoryIdentity;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io;
@@ -203,6 +204,7 @@ pub struct WalkEntry {
     pub(crate) is_symlink: bool,
     pub(crate) bytes: Option<u64>,
     pub(crate) version: Option<FileVersion>,
+    pub(crate) directory_identity: Option<DirectoryIdentity>,
     pub(crate) skip_reason: Option<WalkSkipReason>,
 }
 
@@ -275,6 +277,10 @@ impl WalkEntry {
         if self.skip_reason == Some(WalkSkipReason::MaxDepth) {
             self.skip_reason = None;
         }
+    }
+
+    pub(crate) const fn directory_identity(&self) -> Option<DirectoryIdentity> {
+        self.directory_identity
     }
 }
 

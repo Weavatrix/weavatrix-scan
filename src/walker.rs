@@ -184,6 +184,26 @@ impl Walker {
         options: WalkOptions,
         root_file_system: Option<FileSystemId>,
     ) -> Self {
+        Self::from_known_directory_with_ancestry(
+            root,
+            directory,
+            depth,
+            options,
+            root_file_system,
+            None,
+            HashSet::new(),
+        )
+    }
+
+    pub(crate) fn from_known_directory_with_ancestry(
+        root: &Arc<PathBuf>,
+        directory: PathBuf,
+        depth: usize,
+        options: WalkOptions,
+        root_file_system: Option<FileSystemId>,
+        directory_identity: Option<DirectoryIdentity>,
+        active_directories: HashSet<DirectoryIdentity>,
+    ) -> Self {
         let options = options.normalized();
         let root_components = root.components().count();
         Self {
@@ -199,11 +219,11 @@ impl Walker {
             pending_directory: Some(PendingDirectory {
                 path: directory,
                 depth,
-                identity: None,
+                identity: directory_identity,
                 post_entry: None,
             }),
             skip_pending_directory: false,
-            active_directories: HashSet::new(),
+            active_directories,
             finished: false,
             sorter: None,
             filter: None,

@@ -1,5 +1,5 @@
+use super::ParallelWalker;
 use super::dynamic;
-use super::{ParallelWalker, WalkControl, WalkEvent};
 use crate::control::CancellationToken;
 use crate::walker::{WalkEntry, WalkError};
 use std::io;
@@ -10,8 +10,8 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
-type PullItem = Result<WalkEntry, WalkError>;
-type PullBatch = Vec<PullItem>;
+pub(super) type PullItem = Result<WalkEntry, WalkError>;
+pub(super) type PullBatch = Vec<PullItem>;
 
 /// Bounded pull iterator backed by parallel traversal workers.
 ///
@@ -33,50 +33,27 @@ impl ParallelWalker {
     pub fn into_iter_bounded(self, capacity: usize) -> ParallelWalkIter {
         let capacity = capacity.max(1);
         let batch_size = capacity.min(64);
-        let queued_batches = if self.options.follow_links {
-            capacity.saturating_sub(1)
-        } else {
-            capacity.saturating_sub(batch_size) / batch_size
-        };
+        let queued_batches = capacity.saturating_sub(batch_size) / batch_size;
         let cancellation = CancellationToken::new();
         let worker_cancellation = cancellation.clone();
         let (sender, receiver) = sync_channel(queued_batches);
         let coordinator = std::thread::spawn(move || {
             let emitted_error = Arc::new(AtomicBool::new(false));
-            let result = if self.options.follow_links {
-                let event_sender = sender.clone();
-                let visitor_emitted_error = Arc::clone(&emitted_error);
-                self.visit_with_cancellation(&worker_cancellation, move |event| {
-                    let item = match event {
-                        WalkEvent::Entry(entry) => Ok(entry.clone()),
-                        WalkEvent::Error(error) => {
-                            visitor_emitted_error.store(true, Ordering::Relaxed);
-                            Err(copy_walk_error(error))
-                        }
-                    };
-                    if event_sender.send(vec![item]).is_ok() {
-                        WalkControl::Continue
-                    } else {
-                        WalkControl::Quit
+            let options = self.options.normalized();
+            let event_sender = sender.clone();
+            let visitor_emitted_error = Arc::clone(&emitted_error);
+            let result = dynamic::stream_batched(
+                &self.root,
+                options,
+                self.parallelism,
+                &worker_cancellation,
+                move |entries, errors| {
+                    if !errors.is_empty() {
+                        visitor_emitted_error.store(true, Ordering::Relaxed);
                     }
-                })
-            } else {
-                let options = self.options.normalized();
-                let event_sender = sender.clone();
-                let visitor_emitted_error = Arc::clone(&emitted_error);
-                dynamic::stream_batched(
-                    &self.root,
-                    options,
-                    self.parallelism,
-                    &worker_cancellation,
-                    move |entries, errors| {
-                        if !errors.is_empty() {
-                            visitor_emitted_error.store(true, Ordering::Relaxed);
-                        }
-                        send_batches(&event_sender, batch_size, entries, errors)
-                    },
-                )
-            };
+                    send_batches(&event_sender, batch_size, entries, errors)
+                },
+            );
             if let Err(error) = result
                 && !emitted_error.load(Ordering::Relaxed)
             {
@@ -120,6 +97,19 @@ impl Drop for ParallelWalkIter {
 }
 
 impl ParallelWalkIter {
+    pub(super) fn from_coordinator(
+        receiver: Receiver<PullBatch>,
+        cancellation: CancellationToken,
+        coordinator: JoinHandle<()>,
+    ) -> Self {
+        Self {
+            receiver: Some(receiver),
+            current: Vec::new().into_iter(),
+            cancellation,
+            coordinator: Some(coordinator),
+        }
+    }
+
     fn join_coordinator(&mut self) {
         if let Some(coordinator) = self.coordinator.take() {
             coordinator
@@ -149,7 +139,7 @@ fn send_batches(
     batch.is_empty() || sender.send(batch).is_ok()
 }
 
-fn copy_walk_error(error: &WalkError) -> WalkError {
+pub(super) fn copy_walk_error(error: &WalkError) -> WalkError {
     WalkError::new(
         error.path().to_path_buf(),
         error.depth(),

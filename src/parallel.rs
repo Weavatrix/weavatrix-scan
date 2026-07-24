@@ -1,10 +1,11 @@
 use crate::pool::ThreadPool;
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions};
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 mod collect;
 pub(crate) mod dynamic;
+mod ordered_pull;
 mod pull;
 mod visit;
 mod visit_worker;
@@ -24,8 +25,8 @@ pub struct ParallelWalkReport {
 ///
 /// Broad root frontiers use low-overhead lane traversal. Narrow trees use
 /// dynamic directory scheduling so work below one top-level directory can use
-/// every worker. Link-following falls back to the serial walker so cycle
-/// detection has one authoritative seen set.
+/// every worker. Link-following carries an immutable ancestry set with each
+/// directory task so aliases remain parallel without losing cycle detection.
 pub struct ParallelWalker {
     pub(super) root: PathBuf,
     pub(super) options: WalkOptions,
@@ -68,8 +69,11 @@ impl ParallelWalker {
     /// poisoned.
     pub fn walk(mut self) -> Result<ParallelWalkReport, WalkError> {
         self.options = self.options.normalized();
-        if self.options.follow_links || ThreadPool::is_worker_thread() {
+        if ThreadPool::is_worker_thread() {
             return collect_serial(&self.root, self.options);
+        }
+        if self.options.follow_links {
+            return self.walk_dynamic();
         }
         let mut shallow = collect_shallow(&self.root, self.options)?;
         if self.options.error_policy == ErrorPolicy::Abort && !shallow.errors.is_empty() {
@@ -87,6 +91,41 @@ impl ParallelWalker {
             });
         }
         self.walk_lanes(shallow)
+    }
+
+    fn walk_dynamic(self) -> Result<ParallelWalkReport, WalkError> {
+        let report = Arc::new(Mutex::new(ParallelWalkReport {
+            entries: Vec::new(),
+            errors: Vec::new(),
+        }));
+        let visitor_report = Arc::clone(&report);
+        dynamic::stream_batched(
+            &self.root,
+            self.options,
+            self.parallelism,
+            &crate::CancellationToken::new(),
+            move |entries, errors| {
+                let mut report = visitor_report
+                    .lock()
+                    .expect("parallel walk report is not poisoned");
+                report.entries.extend(entries);
+                report.errors.extend(errors.iter().map(copy_walk_error));
+                true
+            },
+        )?;
+        let mut report = Arc::try_unwrap(report)
+            .expect("parallel walk visitor released report")
+            .into_inner()
+            .expect("parallel walk report is not poisoned");
+        report
+            .entries
+            .sort_unstable_by(|left, right| left.path().cmp(right.path()));
+        report.errors.sort_unstable_by(|left, right| {
+            left.path()
+                .cmp(right.path())
+                .then_with(|| left.depth().cmp(&right.depth()))
+        });
+        Ok(report)
     }
 
     fn walk_lanes(self, shallow: collect::ShallowWalk) -> Result<ParallelWalkReport, WalkError> {
@@ -162,3 +201,12 @@ const fn default_traversal_workers() -> usize {
 }
 
 const FRONTIER_TARGET_TASKS: usize = 4;
+
+fn copy_walk_error(error: &WalkError) -> WalkError {
+    WalkError::new(
+        error.path().to_path_buf(),
+        error.depth(),
+        error.operation(),
+        std::io::Error::new(error.io_error().kind(), error.io_error().to_string()),
+    )
+}

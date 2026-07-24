@@ -19,7 +19,6 @@ impl ScanOptions {
 
     pub(crate) fn uses_parallel_traversal(&self) -> bool {
         self.limits.max_entries.is_none()
-            && !self.walk.follow_links
             && self.walk.max_open > 1
             && match self.traversal_parallelism.unwrap_or(self.parallelism) {
                 0 => {

@@ -50,7 +50,7 @@ layers:
 | Snapshot-verified content provider | Yes | No | No | No |
 | File sizes and SHA-256 hashes | Yes | No | No | No |
 | Versioned compact incremental cache | Yes | No | No | No |
-| Watcher events to deterministic cache plan | Yes | No | No | No |
+| Watcher events to changed-path manifest update | Yes | No | No | No |
 | Concurrent-mutation evidence | Yes | No | No | No |
 | Aggregate deterministic revision | Yes | No | No | No |
 | Typed manifest delta / rename evidence | Yes | No | No | No |
@@ -59,7 +59,7 @@ layers:
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
 | Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
 | Deterministic backpressured scan sink | Yes | No | No | No |
-| Parallel pull iterator | Yes (bounded) | No (callback API) | No | Yes |
+| Parallel pull iterator | Bounded unordered / ordered DFS | No (callback API) | No | Ordered DFS |
 | Parallel multi-root scanner | Yes | Yes | No | No |
 | Stateful per-directory callback | Yes | No | No | Yes |
 | Separate root-symlink policy | Yes | No | Yes | No |
@@ -183,7 +183,26 @@ let entries = WalkBuilder::new("repo-a")
 Custom sort callbacks receive native `OsStr` names, so sorting never requires
 lossy UTF-8 conversion. Directory filters run before descent.
 `filter_directories_stateful` accepts `FnMut`, serializes callback access, and
-keeps one captured state across every root in the builder.
+keeps one captured state across every root in the builder. For batch mutation
+and typed state propagation, `StatefulWalkBuilder<R, E>::process_read_dir`
+receives all immediate children before they are yielded. It can reorder or
+retain the batch, mutate `R` inherited by child directories, attach `E` to
+entries, and disable descent per entry.
+
+```rust
+use weavatrix_scan::StatefulWalkBuilder;
+
+let entries = StatefulWalkBuilder::<usize, usize>::new(".", 0)
+    .process_read_dir(|_, _, depth_state, entries| {
+        *depth_state += 1;
+        for entry in entries.iter_mut().filter_map(|item| item.as_mut().ok()) {
+            entry.state = *depth_state;
+        }
+    })
+    .build()?
+    .collect::<Result<Vec<_>, _>>()?;
+# Ok::<(), weavatrix_scan::WalkError>(())
+```
 
 `ParallelWalker` adapts between low-overhead frontier lanes and dynamic
 scheduling below narrow top-level trees:
@@ -230,6 +249,11 @@ for entry in ParallelWalker::new(".").into_iter_bounded(1024) {
 }
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
+
+Use `into_iter_ordered_bounded` when consumers require strict deterministic DFS
+ordering. It prefetches directory reads in parallel while preserving the
+configured output capacity and `max_open` bound. Both pull modes cancel and
+join their coordinator when dropped.
 
 Larger bounded buffers improve throughput without changing the memory bound.
 Very small capacities are useful when minimum buffered state matters more than
@@ -404,8 +428,8 @@ use weavatrix_scan::{CacheValidationPolicy, ScanOptions, Scanner};
 
 let options = ScanOptions::default()
     .with_cache_validation(CacheValidationPolicy::Strict);
-let first = Scanner::with_options(".", options.clone()).scan()?;
-let second = Scanner::with_options(".", options).scan_cached(&first.to_cache())?;
+let first = Scanner::new(".").options(options.clone()).scan()?;
+let second = Scanner::new(".").options(options).scan_cached(&first.to_cache())?;
 assert_eq!(first.revision, second.revision);
 # Ok::<(), weavatrix_scan::Error>(())
 ```
@@ -419,6 +443,11 @@ any watcher library into sorted relative `WatchPlan` invalidations. Events
 outside the root are rejected, while directory, ignore-source, and explicit
 rescan events request a full scan. `ScanCache::apply_watch_plan` removes only
 affected entries or clears the cache when selection may have changed.
+`Scanner::scan_watch_plan` goes further: for a safe file-only plan it re-matches
+and inspects only changed paths, removes deleted paths from the previous
+manifest, keeps unchanged evidence, and recomputes the deterministic revision
+without traversing the tree. Structural, unsafe, partial, or selection-changing
+plans automatically use a complete scan.
 
 `SkipKind` distinguishes:
 
@@ -522,8 +551,9 @@ and extension filtering, but never bypass size or binary safety checks.
 decision without requiring a full walk. Differential tests compare
 exact selected path sets against the `ignore` crate for anchored, nested,
 negated, wildcard, and character-class fixtures plus 96-seed deterministic
-randomized rule sets and direct comparison with `git check-ignore`. Stress
-cases cover
+randomized rule sets and direct comparison with `git check-ignore`. A scheduled
+workflow also runs 100,000 arbitrary-byte grammar cases and deterministic
+directory-read fault injection. Stress cases cover
 deep trees, permission errors, raw non-UTF8 ignore rules/names, percent escapes,
 and followed symlink loops. The
 differential suite and competitor crates are dev-only.
@@ -535,6 +565,8 @@ differential suite and competitor crates are dev-only.
 - canonicalizes and validates the root before traversal;
 - does not follow symlink entries by default;
 - rejects followed links outside the canonical root and detects cycles;
+- follows in-root links in parallel using per-task ancestry, without a serial
+  mode switch;
 - can enforce a same-filesystem boundary;
 - continues after independent local errors by default and marks the report
   partial;
@@ -667,7 +699,10 @@ The test suite covers:
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
 - streaming parallel pruning and cancellation;
+- ordered bounded parallel DFS and parallel followed-link cycle handling;
 - reentrant parallel callbacks, panic propagation, and pool reuse;
+- changed-path watcher manifests, arbitrary-byte ignore grammar, and injected
+  directory-read failures;
 - manifest delta evidence and live matcher refresh;
 - optional Serde support.
 

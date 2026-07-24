@@ -34,6 +34,7 @@ mod scan_match;
 mod scan_stream;
 mod scanner;
 mod snapshot;
+mod stateful_walk;
 mod walk_builder;
 mod walk_iter;
 mod walk_platform;
@@ -67,6 +68,7 @@ pub use report::{
 pub use scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
 pub use scanner::{Scanner, scan_repository};
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
+pub use stateful_walk::{StatefulWalkBuilder, StatefulWalkEntry, StatefulWalker};
 pub use walk_builder::{MultiWalker, WalkBuilder};
 pub use walker::{
     ErrorPolicy, RootSymlinkPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions,

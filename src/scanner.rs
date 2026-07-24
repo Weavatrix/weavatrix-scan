@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 mod entry;
 mod stream;
+mod watch_update;
 
 use entry::{process_entry, record_walk_error, walker_error_into_scan_error};
 
@@ -69,6 +70,24 @@ impl Scanner {
     /// Returns the same errors as [`Self::scan`].
     pub fn scan_cached(self, cache: &ScanCache) -> Result<ScanReport> {
         scan_repository_with_options(&self.root, &self.options, Some(cache))
+    }
+
+    /// Applies a watcher plan without traversing unchanged directories.
+    ///
+    /// Safe file-only plans re-match and inspect only changed paths, remove
+    /// deleted paths, merge unchanged manifest evidence, and recompute the
+    /// revision. Plans that can affect selection or directory structure fall
+    /// back to a complete scan.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::scan`].
+    pub fn scan_watch_plan(
+        self,
+        previous: &ScanReport,
+        plan: &crate::WatchPlan,
+    ) -> Result<ScanReport> {
+        watch_update::scan_watch_plan(&self.root, &self.options, previous, plan)
     }
 }
 

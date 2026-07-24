@@ -1,0 +1,32 @@
+name: Continuous grammar fuzz and I/O faults
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+  pull_request:
+    paths:
+      - "src/ignore/**"
+      - "src/parallel/**"
+      - "src/walker.rs"
+      - "src/walk_visit.rs"
+      - "tests/p3_fault_injection.rs"
+      - ".github/workflows/fuzz.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-and-faults:
+    name: Grammar fuzz and fault injection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Run 100k deterministic arbitrary-byte grammar cases
+        env:
+          WEAVATRIX_FUZZ_CASES: "100000"
+        run: cargo +stable test --release --locked --lib arbitrary_gitignore_grammar
+      - name: Inject traversal I/O faults
+        run: cargo +stable test --locked --test p3_fault_injection

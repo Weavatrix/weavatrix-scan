@@ -116,6 +116,7 @@ impl Walker {
             is_symlink,
             bytes,
             version,
+            directory_identity,
             skip_reason,
         })
     }
