@@ -85,6 +85,10 @@ const fn changed_ns(_metadata: &Metadata) -> Option<u128> {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the target-specific helpers intentionally share one portable return shape"
+)]
 fn metadata_identity(metadata: &Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt as _;
     Some(FileIdentity {
@@ -108,6 +112,10 @@ fn file_identity(file: &File, _metadata: &Metadata) -> std::io::Result<Option<Fi
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Windows identity lookup is fallible, so every target keeps the same interface"
+)]
 fn file_identity(_file: &File, metadata: &Metadata) -> std::io::Result<Option<FileIdentity>> {
     Ok(metadata_identity(metadata))
 }

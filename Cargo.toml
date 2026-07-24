@@ -14,7 +14,7 @@ keywords = ["repository", "scanner", "gitignore", "static-analysis", "code-intel
 categories = ["development-tools", "filesystem"]
 
 [dependencies]
-notify = { version = "8.2.0", optional = true, default-features = false }
+notify = { version = "8.2.0", optional = true }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 
 [target.'cfg(windows)'.dependencies]

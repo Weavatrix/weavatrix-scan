@@ -61,7 +61,7 @@ fn non_utf8_paths_and_symlink_loops_have_lossless_differential_evidence() {
 }
 
 #[test]
-fn non_utf8_and_percent_ignore_rules_match_native_paths() {
+fn non_utf8_rules_are_lossless_and_percent_rules_match_ignore() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt as _;
 
@@ -88,6 +88,22 @@ fn non_utf8_and_percent_ignore_rules_match_native_paths() {
         .map(|file| file.absolute)
         .collect::<BTreeSet<_>>();
 
+    assert_eq!(ours, BTreeSet::from([fixture.root.join("visible.rs")]));
+
+    fixture.write(".gitignore", "100%.rs\n");
+    let mut percent_options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .metadata_only();
+    percent_options.standard_skips = StandardSkips::Disabled;
+    let percent_ours = Scanner::new(&fixture.root)
+        .options(percent_options)
+        .scan()
+        .unwrap()
+        .files
+        .into_iter()
+        .map(|file| file.absolute)
+        .collect::<BTreeSet<_>>();
+
     let mut builder = WalkBuilder::new(&fixture.root);
     builder
         .hidden(false)
@@ -104,11 +120,10 @@ fn non_utf8_and_percent_ignore_rules_match_native_paths() {
                 .extension()
                 .is_some_and(|extension| extension == "rs")
         })
-        .map(|entry| entry.into_path())
+        .map(ignore::DirEntry::into_path)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(ours, reference);
-    assert_eq!(ours, BTreeSet::from([fixture.root.join("visible.rs")]));
+    assert_eq!(percent_ours, reference);
 }
 
 #[cfg(unix)]

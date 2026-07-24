@@ -25,6 +25,10 @@ fn platform_path_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the target-specific helpers intentionally share one portable return shape"
+)]
 fn metadata_identity(metadata: &std::fs::Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt as _;
     Some(FileIdentity {

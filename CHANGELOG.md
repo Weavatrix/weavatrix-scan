@@ -6,6 +6,8 @@ All notable changes to this project are documented here.
 
 ## 0.3.0 - 2026-07-24
 
+- Enable `notify`'s native macOS backend and keep raw non-UTF8 ignore coverage
+  separate from UTF-8-only reference-matcher differential checks.
 - Add `Scanner::visit_content`, a bounded parallel selected-content pipeline
   with worker-local state, borrowed byte chunks, single-pass hash/binary
   evidence, stable root/path identity, `SkipFile`/global `Quit`, selected
