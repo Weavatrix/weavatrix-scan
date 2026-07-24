@@ -12,11 +12,14 @@ pub(crate) fn path_matches(path: &Path, expected: FileIdentity) -> io::Result<bo
 
 #[cfg(unix)]
 fn platform_stdout_identity() -> Option<FileIdentity> {
-    std::fs::metadata("/dev/stdout")
-        .or_else(|_| std::fs::metadata("/proc/self/fd/1"))
-        .ok()
-        .filter(std::fs::Metadata::is_file)
-        .and_then(|metadata| metadata_identity(&metadata))
+    ["/dev/stdout", "/dev/fd/1", "/proc/self/fd/1"]
+        .into_iter()
+        .find_map(|path| {
+            std::fs::metadata(path)
+                .ok()
+                .filter(std::fs::Metadata::is_file)
+                .and_then(|metadata| metadata_identity(&metadata))
+        })
 }
 
 #[cfg(unix)]
