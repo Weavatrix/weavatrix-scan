@@ -1,14 +1,17 @@
 mod support;
 
+use ignore::{WalkBuilder as IgnoreWalkBuilder, WalkState};
 use jwalk::{WalkDir as JWalkDir, WalkDirGeneric as JWalkDirGeneric};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use support::{
     BenchmarkCase, EXTENSIONS, Fixture, RAW_FILES, SOURCE_FILES, measure_group, print_measurement,
 };
 use weavatrix_scan::{
-    ParallelWalker, RootSymlinkPolicy, ScanOptions, Scanner, StatefulWalkBuilder,
-    StatefulWalkEntry, WalkBuilder, WalkEntry, WalkOptions, Walker, WatchEvent, WatchEventKind,
-    WatcherEventAdapter,
+    ParallelMultiWalker, ParallelWalker, RootSymlinkPolicy, ScanOptions, Scanner,
+    StatefulWalkBuilder, StatefulWalkEntry, WalkBuilder, WalkControl, WalkEntry, WalkEvent,
+    WalkOptions, Walker, WatchEvent, WatchEventKind, WatcherEventAdapter,
 };
 
 fn main() {
@@ -19,6 +22,7 @@ fn main() {
     );
     benchmark_parallel_pull(&fixture);
     benchmark_directory_callbacks(&fixture);
+    benchmark_parallel_multi_stream(&fixture);
     benchmark_root_policy(&fixture);
     benchmark_watcher_adapter(&fixture);
 }
@@ -47,6 +51,69 @@ fn benchmark_parallel_pull(fixture: &Fixture) {
         assert_eq!(result.count, RAW_FILES);
         print_measurement("parallel-pull", case.name, &result);
     }
+}
+
+fn benchmark_parallel_multi_stream(fixture: &Fixture) {
+    let expected = RAW_FILES * 2;
+    let mut cases = vec![
+        BenchmarkCase::new("weavatrix-multi-stream", || {
+            weavatrix_multi_stream_count(&fixture.root)
+        }),
+        BenchmarkCase::new("ignore-multi-stream", || {
+            ignore_multi_stream_count(&fixture.root)
+        }),
+    ];
+    let results = measure_group(&mut cases);
+    for (case, result) in cases.iter().zip(results) {
+        assert_eq!(result.count, expected);
+        print_measurement("parallel-multi-stream", case.name, &result);
+    }
+}
+
+fn weavatrix_multi_stream_count(root: &Path) -> usize {
+    let count = Arc::new(AtomicUsize::new(0));
+    let callback_count = Arc::clone(&count);
+    ParallelMultiWalker::new(root)
+        .add_root(root)
+        .with_root_parallelism(2)
+        .visit(move |event| {
+            if let WalkEvent::Entry(entry) = event.event
+                && entry.is_file()
+                && has_extension(entry.path())
+            {
+                callback_count.fetch_add(1, Ordering::Relaxed);
+            }
+            WalkControl::Continue
+        })
+        .unwrap();
+    count.load(Ordering::Relaxed)
+}
+
+fn ignore_multi_stream_count(root: &Path) -> usize {
+    let count = Arc::new(AtomicUsize::new(0));
+    let mut builder = IgnoreWalkBuilder::new(root);
+    builder
+        .add(root)
+        .hidden(false)
+        .ignore(false)
+        .git_global(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .parents(false)
+        .require_git(false);
+    builder.build_parallel().run(|| {
+        let callback_count = Arc::clone(&count);
+        Box::new(move |result| {
+            if let Ok(entry) = result
+                && entry.file_type().is_some_and(|kind| kind.is_file())
+                && has_extension(entry.path())
+            {
+                callback_count.fetch_add(1, Ordering::Relaxed);
+            }
+            WalkState::Continue
+        })
+    });
+    count.load(Ordering::Relaxed)
 }
 
 fn benchmark_directory_callbacks(fixture: &Fixture) {

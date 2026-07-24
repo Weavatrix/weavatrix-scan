@@ -33,7 +33,8 @@ layers:
   retained root path and optional boxed rich evidence for million-file
   manifests;
 - `MultiScanner`: ordered, concurrent scans across independent roots;
-- `ParallelMultiWalker`: ordered reports from concurrent raw roots;
+- `ParallelMultiWalker`: collected or direct-streaming traversal across
+  concurrent raw roots with ordered per-root reports;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
 - `ParallelWalker`: bounded adaptive traversal for broad or skewed trees.
 - `ParallelRuntime`: process-global, dedicated, or application-owned execution
@@ -88,7 +89,7 @@ walker workload:
 | Parallel collected / streaming traversal | Yes / visitor + bounded pull | No / callback | No / serial iterator | No / ordered iterator |
 | Deterministic backpressured scan sink | Yes | No | No | No |
 | Parallel pull iterator | Bounded unordered / ordered DFS | No (callback API) | No | Ordered DFS |
-| Parallel multi-root raw traversal | Yes | Yes | No | No |
+| Parallel multi-root raw traversal | Collected + streaming | Streaming callback | No | No |
 | Parallel multi-root manifest scanner | Yes | No | No | No |
 | Stateful per-directory batch | Parallel ordered, typed | No | No | Parallel ordered, typed |
 | Redirected-stdout protection | Yes | Yes | No | No |
@@ -106,19 +107,15 @@ must be reproducible and explainable.
 
 ### Remaining competitive boundaries
 
-The three material gaps in retained-manifest memory, embeddable scheduling,
-and parallel stateful batches are now closed. The remaining differences are
-narrower:
+The functional gaps in retained-manifest memory, embeddable scheduling,
+parallel stateful batches, and parallel multi-root streaming are now closed.
+The remaining differences are evidence and ecosystem boundaries:
 
-1. **Parallel streaming multi-root traversal.** Weavatrix has parallel
-   multi-root collected reports and parallel multi-root Scanner reports;
-   `ignore::WalkBuilder::build_parallel` additionally combines multiple roots
-   with a direct callback API.
-2. **Matcher production history.** `ignore` remains the established
+1. **Matcher production history.** `ignore` remains the established
    Git-ignore implementation. Weavatrix checks representative, randomized,
    arbitrary-byte, and million-file exact-manifest parity, but does not claim
    equal ecosystem age.
-3. **Cross-platform million-file evidence.** CI and normal benchmarks cover
+2. **Cross-platform million-file evidence.** CI and normal benchmarks cover
    Linux, Windows, and macOS, while the opt-in million-file RSS result below
    has so far been measured only on Windows.
 
@@ -361,6 +358,34 @@ instead of panicking before traversal starts.
 Larger bounded buffers improve throughput without changing the memory bound.
 Very small capacities are useful when minimum buffered state matters more than
 raw traversal speed.
+
+`ParallelMultiWalker::visit` applies the same direct callback contract across
+multiple roots. Callback order is intentionally concurrent, every event is
+tagged with its root insertion index, and the returned reports stay in root
+insertion order:
+
+```rust
+use weavatrix_scan::{
+    ParallelMultiWalker, WalkControl, WalkEvent,
+};
+
+let summary = ParallelMultiWalker::new("repo-a")
+    .add_root("repo-b")
+    .with_root_parallelism(2)
+    .visit(|event| match event.event {
+        WalkEvent::Entry(entry) if entry.file_name() == "target" => {
+            WalkControl::Skip
+        }
+        WalkEvent::Entry(_) | WalkEvent::Error(_) => WalkControl::Continue,
+    })?;
+
+println!("roots={}, visited={}", summary.len(), summary.visited());
+# Ok::<(), weavatrix_scan::WalkError>(())
+```
+
+`WalkControl::Quit` cooperatively cancels every active root. The cancellable
+form shares one `CancellationToken`; `skip_stdout`, traversal limits, error
+policy, and the selected `ParallelRuntime` apply to every root.
 
 Parallel callbacks may start another walk using the same runtime. Such
 reentrant walks fall back to the iterative serial engine instead of waiting on
@@ -857,9 +882,12 @@ measured the ordered bounded DFS iterator at 6.4 ms versus 8.2 ms for `jwalk`.
 The new parallel typed stateful batch iterator measured 3.4 ms versus 4.3 ms
 for `jwalk::process_read_dir`, 22.2% faster on this sample while preserving the
 same batch mutation, child-state propagation, pruning, and ordered output
-contract. Each process result is itself the median of 11 interleaved measured
-runs after two warmups, not a single best run. Watcher planning and changed-path
-scan profiles remain in the same reproducible benchmark.
+contract. Output-equivalent streaming over two roots and 12,008 files measured
+3.375 ms for Weavatrix versus 7.408 ms for `ignore::build_parallel`, 54.4%
+faster on this sample. Each process result is itself the median of 11
+interleaved measured runs after two warmups, not a single best run. Watcher
+planning and changed-path scan profiles remain in the same reproducible
+benchmark.
 
 Source review explains the remaining differences:
 
@@ -915,6 +943,8 @@ The test suite covers:
 - ordered bounded parallel DFS and parallel followed-link cycle handling;
 - global, dedicated, and rejecting external runtimes, typed submission
   failures, reentrant callbacks, panic propagation, and pool reuse;
+- parallel multi-root callback tagging, subtree pruning, global quit,
+  cancellation, and deterministic per-root reports;
 - serial/parallel stateful batch order, pruning, entry state, inherited child
   state, and multi-worker execution;
 - full/compact exact manifest and revision equivalence;

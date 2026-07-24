@@ -63,7 +63,9 @@ pub use parallel::{
     ParallelVisitReport, ParallelWalkIter, ParallelWalkReport, ParallelWalker, WalkControl,
     WalkEvent,
 };
-pub use parallel_multi::{ParallelMultiWalkReport, ParallelMultiWalker};
+pub use parallel_multi::{
+    ParallelMultiVisitReport, ParallelMultiWalkEvent, ParallelMultiWalkReport, ParallelMultiWalker,
+};
 pub use portable_report::{
     PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
     PortableSkippedEntry,

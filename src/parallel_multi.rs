@@ -1,6 +1,10 @@
 use crate::{ParallelRuntime, ParallelWalkReport, ParallelWalker, WalkError, WalkOptions};
 use std::path::PathBuf;
 
+mod visit;
+
+pub use visit::{ParallelMultiVisitReport, ParallelMultiWalkEvent};
+
 /// Collected raw walk reports for independent roots in insertion order.
 #[derive(Debug)]
 pub struct ParallelMultiWalkReport {

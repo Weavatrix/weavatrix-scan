@@ -4,7 +4,7 @@ mod support;
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use support::Fixture;
 use weavatrix_scan::{
@@ -93,6 +93,17 @@ fn external_pool_submission_failure_is_typed_and_does_not_hang() {
         .scan()
         .unwrap_err();
     assert!(scanner_error.to_string().contains("external pool busy"));
+
+    let multi_error = ParallelMultiWalker::new(&fixture.root)
+        .add_root(&fixture.root)
+        .with_root_parallelism(2)
+        .runtime(
+            ParallelRuntime::external(Arc::new(RejectingExecutor))
+                .with_busy_timeout(Some(Duration::from_millis(1))),
+        )
+        .visit(|_| WalkControl::Continue)
+        .unwrap_err();
+    assert_eq!(multi_error.operation(), WalkOperation::ScheduleWorker);
 }
 
 #[test]
@@ -285,6 +296,82 @@ fn parallel_raw_multi_root_walk_preserves_root_order() {
             .iter()
             .any(|entry| entry.file_name() == "first.rs")
     );
+}
+
+#[test]
+fn parallel_multi_root_streaming_tags_roots_and_preserves_report_order() {
+    let first = Fixture::new("scan-stream-multi-first");
+    let second = Fixture::new("scan-stream-multi-second");
+    first.write("keep/first.rs", "fn first() {}\n");
+    first.write("skip/hidden.rs", "fn hidden() {}\n");
+    second.write("second.rs", "fn second() {}\n");
+    let expected_roots = Arc::new([second.root.clone(), first.root.clone()]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let callback_seen = Arc::clone(&seen);
+    let callback_roots = Arc::clone(&expected_roots);
+
+    let report = ParallelMultiWalker::new(&second.root)
+        .add_root(&first.root)
+        .with_root_parallelism(2)
+        .with_traversal_parallelism(2)
+        .visit(move |event| {
+            assert_eq!(event.root, callback_roots[event.root_index]);
+            match event.event {
+                WalkEvent::Entry(entry) if entry.file_name() == "skip" => WalkControl::Skip,
+                WalkEvent::Entry(entry) if entry.is_file() => {
+                    callback_seen
+                        .lock()
+                        .unwrap()
+                        .push((event.root_index, entry.relative_path().to_path_buf()));
+                    WalkControl::Continue
+                }
+                WalkEvent::Entry(_) | WalkEvent::Error(_) => WalkControl::Continue,
+            }
+        })
+        .unwrap();
+
+    let mut seen = seen.lock().unwrap().clone();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        [
+            (0, Path::new("second.rs").to_path_buf()),
+            (1, Path::new("keep/first.rs").to_path_buf()),
+        ]
+    );
+    assert_eq!(report.len(), 2);
+    assert!(report.reports[0].visited >= 2);
+    assert!(report.reports[1].visited >= 3);
+    assert!(!report.cancelled());
+}
+
+#[test]
+fn parallel_multi_root_quit_cancels_every_root() {
+    let first = Fixture::new("scan-stream-quit-first");
+    let second = Fixture::new("scan-stream-quit-second");
+    for index in 0..32 {
+        first.write(&format!("a{index:02}/value.rs"), "fn value() {}\n");
+        second.write(&format!("b{index:02}/value.rs"), "fn value() {}\n");
+    }
+    let cancellation = weavatrix_scan::CancellationToken::new();
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_stopped = Arc::clone(&stopped);
+    let report = ParallelMultiWalker::new(&first.root)
+        .add_root(&second.root)
+        .with_root_parallelism(2)
+        .visit_with_cancellation(&cancellation, move |_| {
+            if callback_stopped.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                WalkControl::Continue
+            } else {
+                WalkControl::Quit
+            }
+        })
+        .unwrap();
+
+    assert!(cancellation.is_cancelled());
+    assert!(report.quit());
+    assert!(report.cancelled());
+    assert_eq!(report.len(), 2);
 }
 
 #[test]

@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Add direct parallel multi-root streaming callbacks with root-index tagging,
+  shared `Skip`/`Quit`/cancellation semantics, selected-runtime support, and
+  deterministic per-root reports.
 - Add `ParallelRuntime` with process-global, fallibly created dedicated, and
   application-owned executors, external busy-timeout propagation, typed
   worker-submission failures, and reentrant callback safety across walker,
