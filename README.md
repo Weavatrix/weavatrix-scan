@@ -17,18 +17,44 @@ native volume and file identities.
 
 ## Why another repository walker?
 
-`walkdir` and `jwalk` are excellent traversal libraries. `ignore` adds mature
-Git-style filtering. Weavatrix Scan exposes deliberately separate layers:
+[`walkdir`](https://docs.rs/walkdir/latest/walkdir/struct.WalkDir.html) and
+[`jwalk`](https://docs.rs/jwalk/latest/jwalk/struct.WalkDirGeneric.html) are
+excellent traversal libraries.
+[`ignore`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html) adds
+mature Git-style filtering. Weavatrix Scan exposes deliberately separate
+layers:
 
 - `Walker`: iterative, streaming, lossless low-level traversal;
 - `WalkBuilder`: multi-root traversal, native sorting, directory filters, and
   contents-first ordering;
 - `Scanner`: ignore-aware deterministic manifest, hashes, revision, and typed
   evidence;
+- `CompactScanReport`: the same deterministic selection and revision with one
+  retained root path and optional boxed rich evidence for million-file
+  manifests;
 - `MultiScanner`: ordered, concurrent scans across independent roots;
 - `ParallelMultiWalker`: ordered reports from concurrent raw roots;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
 - `ParallelWalker`: bounded adaptive traversal for broad or skewed trees.
+- `ParallelRuntime`: process-global, dedicated, or application-owned execution
+  shared by walker and scanner APIs.
+
+### Competitive position
+
+Against the versions tested in this repository (`ignore` 0.4.31, `walkdir`
+2.5.0, and `jwalk` 0.8.1), Weavatrix Scan is the strongest overall fit when the
+output must be a deterministic, explainable code-scanner manifest rather than
+only a stream of directory entries. It is not the universal winner for every
+walker workload:
+
+| Workload | Strongest fit in this comparison | Why |
+| --- | --- | --- |
+| Deterministic code-scanner manifest | **Weavatrix Scan** | Only entry with normalized paths, hashes, aggregate revision, typed skips, portable evidence, incremental cache, and changed-path updates |
+| Raw parallel streaming | **Weavatrix `ParallelWalker`** | 264.7 ms and 7.6 MiB peak on the measured 1,000,000-file Windows fixture |
+| Minimal serial traversal | **walkdir / Weavatrix `Walker`** | walkdir remains the small established primitive; Walker measured 546.3 ms versus 584.5 ms with comparable 5 MiB-class memory |
+| Memory-efficient deterministic manifest | **Weavatrix `CompactScanReport`** | Exact output parity at 1,019.4 ms / 63.2 MiB; `ignore` used 56.4 MiB but took 2,106.7 ms and does not produce revision/evidence |
+| Git-ignore matcher ecosystem | **ignore** | Reference implementation and broader production history; Weavatrix continuously checks exact manifest parity against it |
+| Host-owned parallel scheduling | **Weavatrix / jwalk** | Weavatrix accepts any fallible executor plus busy-timeout policy or creates an owned pool; jwalk has direct Rayon pool modes |
 
 | Capability | weavatrix-scan | ignore | walkdir | jwalk |
 | --- | :---: | :---: | :---: | :---: |
@@ -36,17 +62,17 @@ Git-style filtering. Weavatrix Scan exposes deliberately separate layers:
 | Single-file root | Yes | Yes | Yes | Yes |
 | Lossless native paths | Yes | Yes | Yes | Yes |
 | Continue after local errors | Configurable | Yes | Yes | Yes |
-| `max_depth` / bounded handles | Yes | Yes | Yes | Depth limit |
+| Depth / open-handle control | Depth + configurable `max_open` | Depth + internally bounded | Depth + configurable `max_open` | Depth + directory scheduler |
 | Same-filesystem boundary | Yes | Yes | Yes | No |
 | `.gitignore` hierarchy | Yes | Yes | No | No |
 | Custom ignore files | Yes | Yes | No | No |
 | Repository / Git-compatible ignore modes | Yes | Yes | No | No |
-| Override globs / source switches | Yes | Yes | No | Directory callback |
+| Override globs / source switches | Yes | Yes | No | No |
 | Reusable cached matcher | Yes | Yes | No | No |
-| Multi-root / full-entry custom sort | Serial + parallel / Yes | Yes / Yes | No / Yes | No / Yes |
-| Directory callback / contents-first | Yes / Yes | Yes / Yes | Yes / Yes | Yes / No |
-| Built-in types / composition / negation | Yes / Yes / Yes | Yes / Yes / Yes | No | No |
-| Stable normalized paths | Yes | No | No | Sorted traversal |
+| Multi-root / custom sort | Serial + parallel / full `DirEntry` | Yes / name or path, serial only | No / full `DirEntry` | No / mutable directory batch |
+| Directory callback / contents-first | Parallel typed batch / Yes | Filter only / No | Filter / Yes | Parallel typed batch / No |
+| Built-in types / composition / negation | 265 / Yes / Yes | 224 / Yes / Yes | No | No |
+| Stable normalized paths | Yes | No | No | No |
 | Path-safe portable report | Yes | No | No | No |
 | Snapshot-verified content provider | Yes | No | No | No |
 | File sizes and SHA-256 hashes | Yes | No | No | No |
@@ -59,23 +85,47 @@ Git-style filtering. Weavatrix Scan exposes deliberately separate layers:
 | Binary and oversized-file policy | Yes | No | No | No |
 | Typed skip reasons and warnings | Yes | No | No | No |
 | Symlinks skipped by default / loop detection | Yes | Yes | Yes | Configurable |
-| Parallel collected / streaming traversal | Yes / Yes | Yes / Yes | No | Yes / Yes |
+| Parallel collected / streaming traversal | Yes / visitor + bounded pull | No / callback | No / serial iterator | No / ordered iterator |
 | Deterministic backpressured scan sink | Yes | No | No | No |
 | Parallel pull iterator | Bounded unordered / ordered DFS | No (callback API) | No | Ordered DFS |
-| Parallel multi-root scanner | Yes | Yes | No | No |
-| Stateful per-directory callback | Yes | No | No | Yes |
+| Parallel multi-root raw traversal | Yes | Yes | No | No |
+| Parallel multi-root manifest scanner | Yes | No | No | No |
+| Stateful per-directory batch | Parallel ordered, typed | No | No | Parallel ordered, typed |
 | Redirected-stdout protection | Yes | Yes | No | No |
 | Separate root-symlink policy | Yes | No | Yes | No |
 | Cancellation and whole-scan budgets | Yes | Quit only | No | No |
 | Minimum depth / hidden policy | Yes / Yes | Yes / Yes | Yes / No | Yes / Yes |
+| Existing/dedicated worker pool | Generic external / owned | Internal threads | Not applicable | Rayon existing / new |
+| Busy timeout / fallible submission | External contract / Yes | No / No | Not applicable | Yes / Yes |
+| Measured 1M raw time / peak | **264.7 ms / 7.6 MiB** | Not raw-equivalent | 584.5 ms / **4.6 MiB** | 313.1 ms / 159.7 MiB |
+| Measured 833k manifest time / peak | **Compact: 1,019.4 ms / 63.2 MiB** | 2,106.7 ms / **56.4 MiB** | Not a scanner | Not a scanner |
 | Default runtime dependencies | 0 Unix / 1 Windows | Multiple | 2 platform helpers | Rayon stack |
 
 Use `Walker` when you only need paths. Use `Scanner` when downstream results
 must be reproducible and explainable.
 
-The remaining differences are API shape and workload focus rather than scanner
-correctness gaps. Weavatrix keeps deterministic manifest construction separate
-from raw parallel traversal and exposes both callback and bounded pull modes.
+### Remaining competitive boundaries
+
+The three material gaps in retained-manifest memory, embeddable scheduling,
+and parallel stateful batches are now closed. The remaining differences are
+narrower:
+
+1. **Parallel streaming multi-root traversal.** Weavatrix has parallel
+   multi-root collected reports and parallel multi-root Scanner reports;
+   `ignore::WalkBuilder::build_parallel` additionally combines multiple roots
+   with a direct callback API.
+2. **Matcher production history.** `ignore` remains the established
+   Git-ignore implementation. Weavatrix checks representative, randomized,
+   arbitrary-byte, and million-file exact-manifest parity, but does not claim
+   equal ecosystem age.
+3. **Cross-platform million-file evidence.** CI and normal benchmarks cover
+   Linux, Windows, and macOS, while the opt-in million-file RSS result below
+   has so far been measured only on Windows.
+
+The million-file result establishes top-tier performance on the measured
+Windows fixture, not a universal cross-platform ranking. The regular benchmark
+workflow still validates smaller output-equivalent corpora on Linux, Windows,
+and macOS; the million-file profile remains opt-in.
 
 ## Install
 
@@ -136,11 +186,16 @@ let report = Scanner::new(".")
             .metadata_only()
             .selected_files_only(),
     )
-    .scan()?;
+    .scan_compact()?;
 
-assert!(report.files.iter().all(|file| file.content_hash.is_none()));
+assert!(report.files.iter().all(|file| file.content.is_none()));
 # Ok::<(), weavatrix_scan::Error>(())
 ```
+
+`scan_compact` discovers directly into root-shared records; it does not first
+build and convert a full report. Use `report.absolute_path(file)` only for the
+entries that need an owned absolute path. Rich compact scans retain hashes in
+optional boxed content evidence, accessible with `file.content_hash()`.
 
 ## Low-level walkers
 
@@ -195,7 +250,9 @@ file type, and metadata access. `sort_by_name` remains the allocation-free
 native `OsStr` comparator, so sorting never requires lossy UTF-8 conversion.
 Low-level walkers accept either a directory or one file as the root.
 `skip_stdout(true)` prevents a redirected output file inside the tree from
-feeding back into a command that is scanning it. Directory filters run before
+feeding back into a command that is scanning it. `ParallelWalker` applies the
+same option to collected, visitor, unordered-pull, and ordered-pull traversal;
+`ParallelMultiWalker` applies it to every root. Directory filters run before
 descent.
 `filter_directories_stateful` accepts `FnMut`, serializes callback access, and
 keeps one captured state across every root in the builder. For batch mutation
@@ -208,16 +265,22 @@ entries, and disable descent per entry.
 use weavatrix_scan::StatefulWalkBuilder;
 
 let entries = StatefulWalkBuilder::<usize, usize>::new(".", 0)
+    .with_parallelism(0)
     .process_read_dir(|_, _, depth_state, entries| {
         *depth_state += 1;
         for entry in entries.iter_mut().filter_map(|item| item.as_mut().ok()) {
             entry.state = *depth_state;
         }
     })
-    .build()?
+    .build_parallel_ordered(1024)?
     .collect::<Result<Vec<_>, _>>()?;
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
+
+The parallel form runs each complete directory batch on the configured
+runtime, propagates callback-mutated state to child tasks, and yields strict
+DFS order under bounded backpressure. `build()` remains the zero-coordinator
+serial iterator.
 
 `ParallelWalker` adapts between low-overhead frontier lanes and dynamic
 scheduling below narrow top-level trees:
@@ -252,6 +315,29 @@ let summary = ParallelWalker::new(".").visit(|event| match event {
 # Ok::<(), weavatrix_scan::WalkError>(())
 ```
 
+Applications can isolate scans or reuse their own scheduler:
+
+```rust
+use weavatrix_scan::{ParallelRuntime, ParallelWalker, Scanner};
+
+let runtime = ParallelRuntime::dedicated(8)?;
+let raw = ParallelWalker::new(".")
+    .runtime(runtime.clone())
+    .walk()?;
+let manifest = Scanner::new(".")
+    .runtime(runtime)
+    .scan_compact()?;
+
+assert!(!raw.entries.is_empty());
+println!("selected={}", manifest.files.len());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`ParallelRuntime::external` accepts an `Arc<dyn ParallelExecutor>`. The
+executor receives each boxed job and the optional busy timeout, and can reject
+submission with `io::Error`; traversal reports that as
+`WalkOperation::ScheduleWorker` without waiting for an unsubmitted worker.
+
 Consumers that prefer pull semantics can use a bounded iterator. A full buffer
 applies backpressure to traversal workers, and dropping the iterator cancels and
 joins its coordinator:
@@ -268,16 +354,19 @@ for entry in ParallelWalker::new(".").into_iter_bounded(1024) {
 Use `into_iter_ordered_bounded` when consumers require strict deterministic DFS
 ordering. It prefetches directory reads in parallel while preserving the
 configured output capacity and `max_open` bound. Both pull modes cancel and
-join their coordinator when dropped.
+join their coordinator when dropped. `try_into_iter_bounded` and
+`try_into_iter_ordered_bounded` report coordinator thread creation failures
+instead of panicking before traversal starts.
 
 Larger bounded buffers improve throughput without changing the memory bound.
 Very small capacities are useful when minimum buffered state matters more than
 raw traversal speed.
 
-Parallel callbacks may start another walk using the same internal pool. Such
+Parallel callbacks may start another walk using the same runtime. Such
 reentrant walks fall back to the iterative serial engine instead of waiting on
 workers that they already occupy. A callback panic stops and wakes the dynamic
-scheduler, is resumed on the caller, and leaves the pool reusable.
+scheduler, is resumed on the caller, and leaves global, dedicated, or external
+execution reusable.
 
 ## Scan modes
 
@@ -539,8 +628,11 @@ let mut options = ScanOptions::default();
 options.standard_skips = StandardSkips::Disabled;
 ```
 
-`NamedFileTypes::defaults()` provides common language, markup, data, and build
-definitions. Types can be composed, selected, and negated; later matching
+`NamedFileTypes::defaults()` provides 265 deterministic language, markup, data,
+build, configuration, and infrastructure definitions backed by 678 patterns.
+That is a strict name-and-pattern superset of the 224 definitions and 594
+patterns in `ignore` 0.4.31. `len()` and `names()` expose the catalog without
+activating it. Types can be composed, selected, and negated; later matching
 selections win:
 
 ```rust
@@ -649,6 +741,25 @@ Run root-policy, stateful-callback, bounded-pull, and watcher-adapter profiles:
 cargo bench --locked --bench p2_apis
 ```
 
+Create, verify, and measure an opt-in synthetic scale fixture outside the
+repository:
+
+```sh
+cargo bench --locked --bench scale_large -- prepare /tmp/weavatrix-scale 1000000
+cargo bench --locked --bench scale_large -- verify /tmp/weavatrix-scale
+cargo bench --locked --bench scale_large -- parallel-stream /tmp/weavatrix-scale 5
+cargo bench --locked --bench scale_large -- scanner-compact /tmp/weavatrix-scale 5
+cargo bench --locked --bench scale_large -- scanner /tmp/weavatrix-scale 5
+```
+
+The command refuses to populate an existing unmarked directory. The fixture
+uses 500 empty `.rs` files per directory; one sixth of its directories are
+excluded by a root `.ignore`. `verify` asserts the exact sorted path/size
+manifest from both full and compact scanners against `ignore`, not only the
+selected count. The profile is
+intentionally opt-in because creating and removing hundreds of thousands or
+millions of filesystem entries is itself expensive.
+
 The synthetic comparison uses 6,000 source files across Rust, Go, and
 TypeScript in 80 sibling directories. It runs two warmups and 11 interleaved
 measured samples, then reports the median. Raw walkers must produce the same
@@ -679,14 +790,76 @@ snapshot evidence, and records typed exclusions. Absolute timings vary by
 filesystem, cache, antivirus, CPU, and operating system; the benchmark workflow
 reruns the same checks on Ubuntu, Windows, and macOS.
 
-The API benchmark uses the same corpus and methodology. The ordered bounded DFS
-iterator measured 16.4 ms versus 24.2 ms for `jwalk`; the unordered iterator at
-capacity 1,024 measured 27.3 ms. The typed stateful batch walker measured
-26.5 ms versus 22.3 ms for the plain serial builder. Coalescing 1,024 watcher
-events into a deterministic plan took 2.3 ms; planning plus invalidating a
-6,000-entry cache took 6.0 ms. Re-matching and hashing 1,024 changed paths took
-126.3 ms versus 196.9 ms for a complete 6,000-file scan. These are
-median-of-five process medians, not single best runs.
+The separate scale profile was measured on the same Windows host with a warm
+filesystem cache. Raw streaming rows are the median of seven independent
+process medians with seven measured runs after warmup. Metadata rows use five
+process medians with five runs, and the rich SHA-256 row uses three process
+medians with three runs. Peak working set is sampled in a fresh process
+containing one warmup and one measured run.
+
+| Work | Implementation | Files | Median | Peak |
+| --- | --- | ---: | ---: | ---: |
+| Raw streaming count | `ParallelWalker::visit` | 300,000 | 90.7 ms | 6.9 MiB |
+| Raw streaming count | jwalk | 300,000 | 96.6 ms | 56.5 MiB |
+| Raw collected paths | `ParallelWalker::walk` | 300,000 | 208.8 ms | 162.5 MiB |
+| Ignore-aware path/size manifest | `Scanner` metadata-only | 250,000 | 346.9 ms | 97.3 MiB |
+| Ignore-aware path/size manifest | ignore | 250,000 | 432.4 ms | 20.5 MiB |
+| No-ignore metadata manifest | `Scanner` metadata-only | 300,000 | 368.9 ms | 157.5 MiB |
+| Ignore-aware content manifest | `Scanner` SHA-256 | 250,000 | 5,693.0 ms | 235.9 MiB |
+| Ignore-aware path emission | `rg --files` to null | 250,000 | 1,117.7 ms | 35.3 MiB |
+
+The scanner row is a stronger contract than the comparison manifest: it also
+captures native version evidence, hashes ignore inputs, normalizes paths,
+sorts deterministically, and computes a revision. The ripgrep row is a
+whole-command throughput guardrail, not a library-equivalent benchmark:
+ripgrep formats and writes every path, while the library rows count or retain
+typed entries in-process. Content hashing is necessarily compared separately
+because `rg --files` does not open and hash every selected file. On this sample
+the bounded streaming walker stayed below jwalk in both median and peak memory,
+and metadata scanning stayed below both the output-equivalent `ignore` manifest
+and the ripgrep guardrail.
+
+The same profile was then expanded to 1,000,000 files in 2,000 directories;
+833,000 files passed `.ignore`. Raw rows below are the median of five
+independent process medians with five measured runs after warmup. The new
+compact/full/ignore manifest rows are the median of three independent process
+medians, each with one warmup and five measured runs; peak is the median of the
+three sampled process peaks. Serial, collected, no-ignore, rich, and ripgrep
+rows retain their earlier methodology described in the preceding revision of
+this benchmark.
+
+| Work | Implementation | Files | Median | Peak |
+| --- | --- | ---: | ---: | ---: |
+| Raw serial count | `Walker` | 1,000,000 | 546.3 ms | 5.0 MiB |
+| Raw streaming count | `ParallelWalker::visit` | 1,000,000 | 264.7 ms | 7.6 MiB |
+| Raw streaming count | jwalk | 1,000,000 | 313.1 ms | 159.7 MiB |
+| Raw serial count | walkdir | 1,000,000 | 584.5 ms | 4.6 MiB |
+| Raw collected paths | `ParallelWalker::walk` | 1,000,000 | 650.2 ms | 529.0 MiB |
+| Ignore-aware compact path/size manifest | `Scanner::scan_compact` metadata-only | 833,000 | **1,019.4 ms** | 63.2 MiB |
+| Ignore-aware full path/size manifest | `Scanner::scan` metadata-only | 833,000 | 1,665.9 ms | 309.6 MiB |
+| Ignore-aware path/size manifest | ignore | 833,000 | 2,106.7 ms | **56.4 MiB** |
+| No-ignore metadata manifest | `Scanner` metadata-only | 1,000,000 | 1,125.2 ms | 369.6 MiB |
+| Ignore-aware content manifest | `Scanner` SHA-256 | 833,000 | 24,716.9 ms | 776.2 MiB |
+| Ignore-aware path emission | `rg --files` to null | 833,000 | 2,156.3 ms | 42.3 MiB |
+| No-ignore path emission | `rg --no-ignore --files` to null | 1,000,000 | 2,535.6 ms | 95.1 MiB |
+
+On this million-file sample, streaming traversal was 15.5% faster than jwalk
+and used 95.2% less peak working set. The compact metadata Scanner was 51.6%
+faster than the output-equivalent `ignore` manifest while using 6.8 MiB more
+peak working set. Compared with the compatibility-oriented full report, it
+reduced peak memory by 79.6% and median time by 38.8%. Use the full report when
+every entry needs an owned absolute path and file-version evidence; use the
+compact report for large retained manifests, streaming traversal for raw
+consumers, and rich hashing only when content evidence is required.
+
+The API benchmark uses the same corpus and methodology. Five process medians
+measured the ordered bounded DFS iterator at 6.4 ms versus 8.2 ms for `jwalk`.
+The new parallel typed stateful batch iterator measured 3.4 ms versus 4.3 ms
+for `jwalk::process_read_dir`, 22.2% faster on this sample while preserving the
+same batch mutation, child-state propagation, pruning, and ordered output
+contract. Each process result is itself the median of 11 interleaved measured
+runs after two warmups, not a single best run. Watcher planning and changed-path
+scan profiles remain in the same reproducible benchmark.
 
 Source review explains the remaining differences:
 
@@ -695,7 +868,9 @@ Source review explains the remaining differences:
 - `ignore` compiles patterns into `GlobSet` matchers and shares inherited
   matchers;
 - Weavatrix `Walker` streams iterative DFS, bounds live handles and buffers the
-  oldest remaining frame only when `max_open` is reached;
+  oldest remaining frame only when `max_open` is reached; its plain-entry fast
+  path and consuming `WalkEntry::into_path` avoid universal-policy checks and
+  long-path clones in raw traversal;
 - Weavatrix `ParallelWalker` expands a small shallow frontier for narrow roots,
   then uses up to 16 Windows or 8 Unix workers without serially over-expanding
   small trees; bounded lanes keep report order independent of worker completion;
@@ -706,11 +881,13 @@ Source review explains the remaining differences:
 The optional real-repository benchmark keeps repository identities and paths
 local; published documentation records only synthetic corpus results. It first
 asserts the exact same sorted `(normalized path, bytes)` manifest. The stress
-profile also measured a
-skewed raw tree at 6.7 ms (`ParallelWalker`), 8.2 ms (`jwalk`), and 14.1 ms
-(`walkdir`), while an unchanged 12 MiB SHA-256 manifest fell from 164.4 ms full
-scan to 1.9 ms with incremental hash reuse. Treat these as reproducible
-samples, not universal constants.
+profile also measured a skewed raw tree at 6.7 ms (`ParallelWalker`), 8.2 ms
+(`jwalk`), and 14.1 ms (`walkdir`). The expanded deep-tree profile contains 60
+levels and 7,680 files; five independent process medians measured 18.9 ms for
+`Walker` and 20.0 ms for `walkdir`, making `Walker` 5.6% faster on that sample.
+An unchanged 12 MiB SHA-256 manifest fell from 164.4 ms full scan to 1.9 ms
+with incremental hash reuse. Treat these as reproducible samples, not
+universal constants.
 
 ## Correctness checks
 
@@ -721,6 +898,8 @@ The test suite covers:
 - repository-only, Git-exclude, parent, explicit and reusable-matcher policies;
 - representative and randomized parity with `ignore`;
 - raw entry parity with `walkdir` and `jwalk`;
+- opt-in exact path/size manifest parity with `ignore` at arbitrary scale,
+  including the measured 1,000,000-file fixture;
 - iterative deep trees, bounded handles, local error continuation, non-UTF8
   paths, and symlink loops;
 - concurrent mutation detection and same-size incremental changes;
@@ -728,12 +907,17 @@ The test suite covers:
 - multi-root walking, named file types, custom native sorting, directory
   filtering, and contents-first ordering;
 - single-file roots, full-entry sorting, built-in type composition/negation,
-  redirected-stdout protection, parallel raw roots, and `notify` conversion;
+  strict catalog superset parity with `ignore`, redirected-stdout protection,
+  parallel raw roots, and `notify` conversion;
 - binary, oversized, extension, generated-directory, and symlink policies;
 - serial/parallel content-inspection equivalence;
 - streaming parallel pruning and cancellation;
 - ordered bounded parallel DFS and parallel followed-link cycle handling;
-- reentrant parallel callbacks, panic propagation, and pool reuse;
+- global, dedicated, and rejecting external runtimes, typed submission
+  failures, reentrant callbacks, panic propagation, and pool reuse;
+- serial/parallel stateful batch order, pruning, entry state, inherited child
+  state, and multi-worker execution;
+- full/compact exact manifest and revision equivalence;
 - changed-path watcher manifests, arbitrary-byte ignore grammar, and injected
   directory-read failures;
 - manifest delta evidence and live matcher refresh;

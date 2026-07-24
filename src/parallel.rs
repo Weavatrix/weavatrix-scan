@@ -1,5 +1,6 @@
-use crate::pool::ThreadPool;
-use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions};
+use crate::FileIdentity;
+use crate::runtime::ParallelRuntime;
+use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -31,6 +32,8 @@ pub struct ParallelWalker {
     pub(super) root: PathBuf,
     pub(super) options: WalkOptions,
     pub(super) parallelism: usize,
+    pub(super) skip_stdout: Option<FileIdentity>,
+    pub(super) runtime: ParallelRuntime,
 }
 
 impl ParallelWalker {
@@ -40,6 +43,8 @@ impl ParallelWalker {
             root: root.into(),
             options: WalkOptions::default(),
             parallelism: 0,
+            skip_stdout: None,
+            runtime: ParallelRuntime::global(),
         }
     }
 
@@ -56,6 +61,24 @@ impl ParallelWalker {
         self
     }
 
+    /// Selects the global, dedicated, or application-owned executor.
+    #[must_use]
+    pub fn runtime(mut self, runtime: ParallelRuntime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    /// Skips a regular file that refers to redirected standard output.
+    ///
+    /// This applies consistently to collected, visitor and pull APIs and
+    /// prevents feedback loops when command output is written inside a walked
+    /// tree.
+    #[must_use]
+    pub fn skip_stdout(mut self, enabled: bool) -> Self {
+        self.skip_stdout = enabled.then(crate::stdout::identity).flatten();
+        self
+    }
+
     /// Walks the tree using bounded adaptive scheduling.
     ///
     /// # Errors
@@ -69,28 +92,36 @@ impl ParallelWalker {
     /// poisoned.
     pub fn walk(mut self) -> Result<ParallelWalkReport, WalkError> {
         self.options = self.options.normalized();
-        if ThreadPool::is_worker_thread() {
-            return collect_serial(&self.root, self.options);
+        let skip_stdout = self.skip_stdout;
+        if self.runtime.is_worker_thread() {
+            return collect_serial(&self.root, self.options)
+                .map(|report| without_stdout(report, skip_stdout));
         }
         if self.options.follow_links {
-            return self.walk_dynamic();
+            return self
+                .walk_dynamic()
+                .map(|report| without_stdout(report, skip_stdout));
         }
         let mut shallow = collect_shallow(&self.root, self.options)?;
         if self.options.error_policy == ErrorPolicy::Abort && !shallow.errors.is_empty() {
             return Err(shallow.errors.into_iter().next().expect("error exists"));
         }
         if !self.options.same_file_system && shallow.tasks.len() < 2 {
-            let target = requested_workers(self.parallelism, self.options.max_open)
+            let target = requested_workers(&self.runtime, self.parallelism, self.options.max_open)
                 .min(FRONTIER_TARGET_TASKS);
             shallow = expand_frontier(shallow, self.options, target);
         }
         if shallow.tasks.is_empty() {
-            return Ok(ParallelWalkReport {
-                entries: shallow.entries,
-                errors: shallow.errors,
-            });
+            return Ok(without_stdout(
+                ParallelWalkReport {
+                    entries: shallow.entries,
+                    errors: shallow.errors,
+                },
+                skip_stdout,
+            ));
         }
         self.walk_lanes(shallow)
+            .map(|report| without_stdout(report, skip_stdout))
     }
 
     fn walk_dynamic(self) -> Result<ParallelWalkReport, WalkError> {
@@ -103,6 +134,7 @@ impl ParallelWalker {
             &self.root,
             self.options,
             self.parallelism,
+            &self.runtime,
             &crate::CancellationToken::new(),
             move |entries, errors| {
                 let mut report = visitor_report
@@ -132,8 +164,12 @@ impl ParallelWalker {
         let mut entries = shallow.entries;
         let mut errors = shallow.errors;
         let task_count = shallow.tasks.len();
-        let worker_count =
-            parallel_worker_count(self.parallelism, self.options.max_open, task_count);
+        let worker_count = parallel_worker_count(
+            &self.runtime,
+            self.parallelism,
+            self.options.max_open,
+            task_count,
+        );
         let mut lanes = (0..worker_count)
             .map(|_| Vec::<DirectoryTask>::new())
             .collect::<Vec<_>>();
@@ -145,10 +181,12 @@ impl ParallelWalker {
             let sender = sender.clone();
             let root = Arc::clone(&shallow.root);
             let options = self.options;
-            ThreadPool::global().execute(move || {
-                let report = collect_lane(lane, options, &root);
-                let _ = sender.send((index, report));
-            });
+            self.runtime
+                .try_execute(move || {
+                    let report = collect_lane(lane, options, &root);
+                    let _ = sender.send((index, report));
+                })
+                .map_err(|source| schedule_error(&self.root, source))?;
         }
         drop(sender);
         let mut completed = (0..worker_count).map(|_| None).collect::<Vec<_>>();
@@ -181,12 +219,19 @@ impl ParallelWalker {
     }
 }
 
-fn parallel_worker_count(parallelism: usize, max_open: usize, tasks: usize) -> usize {
-    requested_workers(parallelism, max_open).min(tasks).max(1)
+fn parallel_worker_count(
+    runtime: &ParallelRuntime,
+    parallelism: usize,
+    max_open: usize,
+    tasks: usize,
+) -> usize {
+    requested_workers(runtime, parallelism, max_open)
+        .min(tasks)
+        .max(1)
 }
 
-fn requested_workers(parallelism: usize, max_open: usize) -> usize {
-    let available = ThreadPool::global().workers();
+fn requested_workers(runtime: &ParallelRuntime, parallelism: usize, max_open: usize) -> usize {
+    let available = runtime.parallelism();
     if parallelism == 0 {
         available.min(default_traversal_workers())
     } else {
@@ -194,6 +239,10 @@ fn requested_workers(parallelism: usize, max_open: usize) -> usize {
     }
     .min(max_open.max(1))
     .max(1)
+}
+
+fn schedule_error(root: &std::path::Path, source: std::io::Error) -> WalkError {
+    WalkError::new(root, 0, WalkOperation::ScheduleWorker, source)
 }
 
 const fn default_traversal_workers() -> usize {
@@ -209,4 +258,22 @@ fn copy_walk_error(error: &WalkError) -> WalkError {
         error.operation(),
         std::io::Error::new(error.io_error().kind(), error.io_error().to_string()),
     )
+}
+
+pub(super) fn matches_stdout(entry: &WalkEntry, identity: Option<FileIdentity>) -> bool {
+    identity.is_some_and(|identity| {
+        entry.is_file() && crate::stdout::path_matches(entry.path(), identity).unwrap_or(false)
+    })
+}
+
+fn without_stdout(
+    mut report: ParallelWalkReport,
+    identity: Option<FileIdentity>,
+) -> ParallelWalkReport {
+    if identity.is_some() {
+        report
+            .entries
+            .retain(|entry| !matches_stdout(entry, identity));
+    }
+    report
 }

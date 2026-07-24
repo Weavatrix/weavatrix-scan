@@ -19,7 +19,8 @@ impl Scanner {
     where
         S: ScanSink,
     {
-        let (mut report, runtime) = discover_repository_with_options(&self.root, &self.options)?;
+        let (mut report, runtime) =
+            discover_repository_with_options(&self.root, &self.options, &self.runtime)?;
         sort_report_evidence(&mut report);
         let files = std::mem::take(&mut report.files);
         let mut revision = RevisionBuilder::new(&report);

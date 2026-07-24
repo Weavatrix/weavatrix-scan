@@ -1,4 +1,5 @@
 use super::visit::{ParallelVisitReport, WalkControl, WalkEvent};
+use crate::FileIdentity;
 use crate::control::CancellationToken;
 use crate::walker::{ErrorPolicy, WalkError, WalkOptions, Walker};
 use std::path::Path;
@@ -6,6 +7,7 @@ use std::path::Path;
 pub(super) fn visit_serial<F>(
     root: &Path,
     options: WalkOptions,
+    skip_stdout: Option<FileIdentity>,
     cancellation: &CancellationToken,
     visitor: F,
 ) -> Result<ParallelVisitReport, WalkError>
@@ -14,7 +16,7 @@ where
 {
     let mut walker_options = options;
     walker_options.error_policy = ErrorPolicy::Continue;
-    let mut walker = Walker::with_options(root, walker_options)?;
+    let mut walker = Walker::with_behavior(root, walker_options, None, None, skip_stdout, false)?;
     let mut visited = 0_u64;
     let mut errors = Vec::new();
     let mut quit = false;

@@ -1,12 +1,14 @@
 use super::visit::{ParallelVisitReport, WalkControl, WalkEvent};
+use crate::FileIdentity;
 use crate::control::CancellationToken;
-use crate::pool::ThreadPool;
+use crate::runtime::ParallelRuntime;
 use crate::walk_platform::DirectoryIdentity;
 use crate::walk_platform::FileSystemId;
-use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
+use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, Walker};
 use std::collections::{HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 mod worker;
@@ -59,21 +61,31 @@ pub(super) fn visit<F>(
     root: &Path,
     options: WalkOptions,
     parallelism: usize,
+    runtime: &ParallelRuntime,
+    skip_stdout: Option<FileIdentity>,
     cancellation: &CancellationToken,
     visitor: F,
 ) -> Result<ParallelVisitReport, WalkError>
 where
     F: for<'entry> Fn(WalkEvent<'entry>) -> WalkControl + Send + Sync + 'static,
 {
-    visit_batched(
+    let skipped = Arc::new(AtomicU64::new(0));
+    let visitor_skipped = Arc::clone(&skipped);
+    let mut report = visit_batched(
         root,
         options,
         parallelism,
+        runtime,
         cancellation,
         move |entries, errors| {
             let mut controls = Vec::with_capacity(entries.len());
             let mut quit = false;
             for entry in entries {
+                if super::matches_stdout(entry, skip_stdout) {
+                    visitor_skipped.fetch_add(1, Ordering::Relaxed);
+                    controls.push(WalkControl::Continue);
+                    continue;
+                }
                 let control = visitor(WalkEvent::Entry(entry));
                 controls.push(control);
                 quit |= control == WalkControl::Quit;
@@ -86,36 +98,42 @@ where
                 quit,
             }
         },
-    )
+    )?;
+    report.visited = report
+        .visited
+        .saturating_sub(skipped.load(Ordering::Relaxed));
+    Ok(report)
 }
 
 pub(crate) fn visit_batched<F>(
     root: &Path,
     options: WalkOptions,
     parallelism: usize,
+    runtime: &ParallelRuntime,
     cancellation: &CancellationToken,
     visitor: F,
 ) -> Result<ParallelVisitReport, WalkError>
 where
     F: Fn(&[WalkEntry], &[WalkError]) -> BatchControl + Send + Sync + 'static,
 {
-    if ThreadPool::is_worker_thread() {
+    if runtime.is_worker_thread() {
         return visit_batched_serial(root, options, cancellation, visitor);
     }
-    run_batched(root, options, parallelism, cancellation, visitor)
+    run_batched(root, options, parallelism, runtime, cancellation, visitor)
 }
 
 pub(crate) fn stream_batched<F>(
     root: &Path,
     options: WalkOptions,
     parallelism: usize,
+    runtime: &ParallelRuntime,
     cancellation: &CancellationToken,
     visitor: F,
 ) -> Result<ParallelVisitReport, WalkError>
 where
     F: Fn(Vec<WalkEntry>, &[WalkError]) -> bool + Send + Sync + 'static,
 {
-    if ThreadPool::is_worker_thread() {
+    if runtime.is_worker_thread() {
         return stream_batched_serial(root, options, cancellation, visitor);
     }
     let (parallel_root, root_file_system, root_entry) = prepare_root(root, options)?;
@@ -140,18 +158,18 @@ where
     let shared = initial_state(&parallel_root, visited, root_identity);
     let visitor = Arc::new(visitor);
     let cancellation = cancellation.clone();
-    let worker_count = worker_count(parallelism, options.max_open);
+    let worker_count = worker_count(runtime, parallelism, options.max_open);
     let (sender, receiver) = mpsc::channel();
-    for _ in 0..worker_count {
-        let shared = Arc::clone(&shared);
+    for submitted in 0..worker_count {
+        let worker_shared = Arc::clone(&shared);
         let visitor = Arc::clone(&visitor);
         let root = Arc::clone(&parallel_root);
         let cancellation = cancellation.clone();
         let sender = sender.clone();
-        ThreadPool::global().execute(move || {
+        if let Err(source) = runtime.try_execute(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 stream_worker(
-                    &shared,
+                    &worker_shared,
                     &root,
                     root_file_system,
                     options,
@@ -160,10 +178,16 @@ where
                 );
             }));
             if outcome.is_err() {
-                worker::abort_after_panic(&shared);
+                worker::abort_after_panic(&worker_shared);
             }
             let _ = sender.send(outcome);
-        });
+        }) {
+            worker::abort_after_submit_error(&shared);
+            for _ in 0..submitted {
+                let _ = receiver.recv();
+            }
+            return Err(schedule_error(parallel_root.as_path(), source));
+        }
     }
     drop(sender);
     let mut panic = None;
@@ -201,6 +225,7 @@ fn run_batched<F>(
     root: &Path,
     options: WalkOptions,
     parallelism: usize,
+    runtime: &ParallelRuntime,
     cancellation: &CancellationToken,
     visitor: F,
 ) -> Result<ParallelVisitReport, WalkError>
@@ -238,18 +263,18 @@ where
     let shared = initial_state(&parallel_root, visited, root_identity);
     let visitor = Arc::new(visitor);
     let cancellation = cancellation.clone();
-    let worker_count = worker_count(parallelism, options.max_open);
+    let worker_count = worker_count(runtime, parallelism, options.max_open);
     let (sender, receiver) = mpsc::channel();
-    for _ in 0..worker_count {
-        let shared = Arc::clone(&shared);
+    for submitted in 0..worker_count {
+        let worker_shared = Arc::clone(&shared);
         let visitor = Arc::clone(&visitor);
         let root = Arc::clone(&parallel_root);
         let cancellation = cancellation.clone();
         let sender = sender.clone();
-        ThreadPool::global().execute(move || {
+        if let Err(source) = runtime.try_execute(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 worker(
-                    &shared,
+                    &worker_shared,
                     &root,
                     root_file_system,
                     options,
@@ -258,10 +283,16 @@ where
                 );
             }));
             if outcome.is_err() {
-                worker::abort_after_panic(&shared);
+                worker::abort_after_panic(&worker_shared);
             }
             let _ = sender.send(outcome);
-        });
+        }) {
+            worker::abort_after_submit_error(&shared);
+            for _ in 0..submitted {
+                let _ = receiver.recv();
+            }
+            return Err(schedule_error(parallel_root.as_path(), source));
+        }
     }
     drop(sender);
     let mut panic = None;
@@ -292,6 +323,10 @@ where
         quit: state.quit,
         cancelled: cancellation.is_cancelled(),
     })
+}
+
+fn schedule_error(root: &Path, source: std::io::Error) -> WalkError {
+    WalkError::new(root, 0, WalkOperation::ScheduleWorker, source)
 }
 
 fn prepare_root(

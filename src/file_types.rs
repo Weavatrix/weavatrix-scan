@@ -1,3 +1,4 @@
+use crate::default_file_types::DEFAULT_FILE_TYPES;
 use crate::glob;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -160,6 +161,23 @@ impl NamedFileTypes {
         self.definitions.contains_key(name)
     }
 
+    /// Returns the number of available named definitions.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.definitions.len()
+    }
+
+    /// Returns whether the catalog contains no named definitions.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.definitions.is_empty()
+    }
+
+    /// Iterates over definition names in deterministic lexical order.
+    pub fn names(&self) -> impl ExactSizeIterator<Item = &str> + DoubleEndedIterator {
+        self.definitions.keys().map(String::as_str)
+    }
+
     pub(crate) fn has_includes(&self) -> bool {
         self.selections
             .iter()
@@ -219,44 +237,27 @@ fn normalized_extension(extension: &str) -> String {
     extension.trim_start_matches('.').to_ascii_lowercase()
 }
 
-#[rustfmt::skip]
-const DEFAULT_FILE_TYPES: &[(&[&str], &[&str])] = &[
-    (&["c"], &["*.c", "*.h"]),
-    (&["cmake"], &["*.cmake", "CMakeLists.txt"]),
-    (&["cpp", "cxx"], &["*.cc", "*.cpp", "*.cxx", "*.hh", "*.hpp", "*.hxx"]),
-    (&["csharp", "cs"], &["*.cs", "*.csproj"]),
-    (&["css"], &["*.css", "*.scss", "*.sass", "*.less"]),
-    (&["dart"], &["*.dart"]),
-    (&["docker", "container"], &["Dockerfile", "Dockerfile.*", "Containerfile", "Containerfile.*"]),
-    (&["elixir"], &["*.ex", "*.exs", "*.heex"]),
-    (&["erlang"], &["*.erl", "*.hrl"]),
-    (&["go"], &["*.go"]),
-    (&["graphql"], &["*.graphql", "*.graphqls"]),
-    (&["haskell"], &["*.hs", "*.lhs"]),
-    (&["html"], &["*.html", "*.htm", "*.ejs"]),
-    (&["java"], &["*.java", "*.jsp"]),
-    (&["javascript", "js"], &["*.js", "*.jsx", "*.mjs", "*.cjs"]),
-    (&["json"], &["*.json", "*.jsonl", "*.sarif"]),
-    (&["julia"], &["*.jl"]),
-    (&["kotlin"], &["*.kt", "*.kts"]),
-    (&["lua"], &["*.lua"]),
-    (&["make"], &["Makefile", "makefile", "GNUmakefile", "*.mk"]),
-    (&["markdown", "md"], &["*.md", "*.markdown", "*.mdx"]),
-    (&["php"], &["*.php", "*.php3", "*.php4", "*.php5", "*.phtml"]),
-    (&["protobuf", "proto"], &["*.proto"]),
-    (&["python", "py"], &["*.py", "*.pyi", "*.pyw"]),
-    (&["ruby"], &["*.rb", "Gemfile", "Rakefile"]),
-    (&["rust", "rs"], &["*.rs"]),
-    (&["scala"], &["*.scala", "*.sbt"]),
-    (&["shell", "sh"], &["*.sh", "*.bash", "*.zsh", "*.fish"]),
-    (&["sql"], &["*.sql"]),
-    (&["svelte"], &["*.svelte"]),
-    (&["swift"], &["*.swift"]),
-    (&["terraform", "hcl"], &["*.tf", "*.tfvars", "*.hcl"]),
-    (&["toml"], &["*.toml", "Cargo.lock"]),
-    (&["typescript", "ts"], &["*.ts", "*.tsx", "*.mts", "*.cts"]),
-    (&["vue"], &["*.vue"]),
-    (&["xml"], &["*.xml", "*.xsd", "*.xsl", "*.xslt"]),
-    (&["yaml", "yml"], &["*.yaml", "*.yml"]),
-    (&["zig"], &["*.zig", "*.zon"]),
-];
+#[cfg(test)]
+mod tests {
+    use super::{NamedFileTypes, pattern_from_glob};
+
+    #[test]
+    fn defaults_include_every_ignore_name_and_pattern() {
+        let ours = NamedFileTypes::defaults();
+        let mut upstream = ignore::types::TypesBuilder::new();
+        upstream.add_defaults();
+        for definition in upstream.definitions() {
+            let patterns = ours
+                .definitions
+                .get(definition.name())
+                .unwrap_or_else(|| panic!("missing ignore type {}", definition.name()));
+            for pattern in definition.globs() {
+                assert!(
+                    patterns.contains(&pattern_from_glob(pattern)),
+                    "missing ignore pattern {}:{pattern}",
+                    definition.name()
+                );
+            }
+        }
+    }
+}

@@ -1,5 +1,5 @@
 use super::entry::record_walk_error;
-use super::scan_repository_with_options;
+use super::scan_repository_with_runtime;
 use crate::WatchPlan;
 use crate::config::ScanOptions;
 use crate::content::inspect_files;
@@ -8,6 +8,7 @@ use crate::file_version::from_metadata;
 use crate::ignore::{RepositoryMatch, RepositoryMatcher};
 use crate::path::normalized_relative_path;
 use crate::report::{ScanCacheStats, ScanReport, ScannedFile, SkipKind};
+use crate::runtime::ParallelRuntime;
 use crate::scan_finalize::finalize_report;
 use crate::scan_limits::apply_total_bytes_limit;
 use crate::scan_match::skip_match;
@@ -23,25 +24,36 @@ pub(super) fn scan_watch_plan(
     options: &ScanOptions,
     previous: &ScanReport,
     plan: &WatchPlan,
+    parallel_runtime: &ParallelRuntime,
 ) -> Result<ScanReport> {
     if plan.full_rescan
         || !previous.complete
         || previous.termination.is_some()
         || options.limits.max_entries.is_some()
     {
-        return scan_repository_with_options(root, options, Some(&previous.to_cache()));
+        return scan_repository_with_runtime(
+            root,
+            options,
+            Some(&previous.to_cache()),
+            parallel_runtime,
+        );
     }
     let canonical = root
         .canonicalize()
         .map_err(|source| Error::io(root, source))?;
     if canonical != previous.root || !canonical.is_dir() {
-        return scan_repository_with_options(root, options, None);
+        return scan_repository_with_runtime(root, options, None, parallel_runtime);
     }
     if plan
         .invalidated()
         .any(|relative| !is_safe_relative(relative))
     {
-        return scan_repository_with_options(root, options, Some(&previous.to_cache()));
+        return scan_repository_with_runtime(
+            root,
+            options,
+            Some(&previous.to_cache()),
+            parallel_runtime,
+        );
     }
 
     let invalidated = plan.invalidated().collect::<HashSet<_>>();
@@ -70,7 +82,12 @@ pub(super) fn scan_watch_plan(
             ChangedPath::Candidate(file) => changed_candidates.push(*file),
             ChangedPath::MissingOrSkipped => {}
             ChangedPath::NeedsFullScan => {
-                return scan_repository_with_options(root, options, Some(&previous.to_cache()));
+                return scan_repository_with_runtime(
+                    root,
+                    options,
+                    Some(&previous.to_cache()),
+                    parallel_runtime,
+                );
             }
         }
     }
@@ -79,7 +96,12 @@ pub(super) fn scan_watch_plan(
         .iter()
         .any(|source| !previous.ignore_sources.contains(source))
     {
-        return scan_repository_with_options(root, options, Some(&previous.to_cache()));
+        return scan_repository_with_runtime(
+            root,
+            options,
+            Some(&previous.to_cache()),
+            parallel_runtime,
+        );
     }
 
     let inspected = inspect_files(changed_candidates, options, Instant::now(), None)?;

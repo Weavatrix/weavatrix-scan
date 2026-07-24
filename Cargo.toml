@@ -51,6 +51,10 @@ harness = false
 name = "p2_apis"
 harness = false
 
+[[bench]]
+name = "scale_large"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 

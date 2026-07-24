@@ -29,43 +29,67 @@ impl ParallelWalker {
     ///
     /// A capacity of zero is normalized to one. Workers stop producing when
     /// the buffer is full until the consumer requests another item.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the coordinator thread cannot be created. Use
+    /// [`Self::try_into_iter_bounded`] for fallible startup.
     #[must_use]
     pub fn into_iter_bounded(self, capacity: usize) -> ParallelWalkIter {
+        self.try_into_iter_bounded(capacity)
+            .expect("parallel pull coordinator thread can be created")
+    }
+
+    /// Fallible form of [`Self::into_iter_bounded`].
+    ///
+    /// This reports an operating-system thread creation failure instead of
+    /// panicking before traversal starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the coordinator thread spawn error.
+    pub fn try_into_iter_bounded(self, capacity: usize) -> io::Result<ParallelWalkIter> {
         let capacity = capacity.max(1);
         let batch_size = capacity.min(64);
         let queued_batches = capacity.saturating_sub(batch_size) / batch_size;
         let cancellation = CancellationToken::new();
         let worker_cancellation = cancellation.clone();
         let (sender, receiver) = sync_channel(queued_batches);
-        let coordinator = std::thread::spawn(move || {
-            let emitted_error = Arc::new(AtomicBool::new(false));
-            let options = self.options.normalized();
-            let event_sender = sender.clone();
-            let visitor_emitted_error = Arc::clone(&emitted_error);
-            let result = dynamic::stream_batched(
-                &self.root,
-                options,
-                self.parallelism,
-                &worker_cancellation,
-                move |entries, errors| {
-                    if !errors.is_empty() {
-                        visitor_emitted_error.store(true, Ordering::Relaxed);
-                    }
-                    send_batches(&event_sender, batch_size, entries, errors)
-                },
-            );
-            if let Err(error) = result
-                && !emitted_error.load(Ordering::Relaxed)
-            {
-                let _ = sender.send(vec![Err(error)]);
-            }
-        });
-        ParallelWalkIter {
+        let coordinator = std::thread::Builder::new()
+            .name("weavatrix-scan-pull".to_owned())
+            .spawn(move || {
+                let emitted_error = Arc::new(AtomicBool::new(false));
+                let options = self.options.normalized();
+                let event_sender = sender.clone();
+                let visitor_emitted_error = Arc::clone(&emitted_error);
+                let result = dynamic::stream_batched(
+                    &self.root,
+                    options,
+                    self.parallelism,
+                    &self.runtime,
+                    &worker_cancellation,
+                    move |mut entries, errors| {
+                        if !errors.is_empty() {
+                            visitor_emitted_error.store(true, Ordering::Relaxed);
+                        }
+                        if self.skip_stdout.is_some() {
+                            entries.retain(|entry| !super::matches_stdout(entry, self.skip_stdout));
+                        }
+                        send_batches(&event_sender, batch_size, entries, errors)
+                    },
+                );
+                if let Err(error) = result
+                    && !emitted_error.load(Ordering::Relaxed)
+                {
+                    let _ = sender.send(vec![Err(error)]);
+                }
+            })?;
+        Ok(ParallelWalkIter {
             receiver: Some(receiver),
             current: Vec::new().into_iter(),
             cancellation,
             coordinator: Some(coordinator),
-        }
+        })
     }
 }
 

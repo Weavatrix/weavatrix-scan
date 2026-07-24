@@ -153,7 +153,7 @@ fn serial_files(root: &Path) -> Paths {
             .unwrap()
             .filter_map(Result::ok)
             .filter(WalkEntry::is_file)
-            .map(|entry| entry.path().to_path_buf()),
+            .map(WalkEntry::into_path),
     )
 }
 
@@ -269,7 +269,13 @@ impl StressFixture {
         for depth in 0..60 {
             directory.push("d");
             std::fs::create_dir(&directory).unwrap();
-            std::fs::write(directory.join(format!("{depth}.rs")), b"fn run() {}\n").unwrap();
+            for file in 0..128 {
+                std::fs::write(
+                    directory.join(format!("{depth}-{file}.rs")),
+                    b"fn run() {}\n",
+                )
+                .unwrap();
+            }
         }
         fixture
     }

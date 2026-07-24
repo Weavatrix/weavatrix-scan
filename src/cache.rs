@@ -1,4 +1,4 @@
-use crate::report::{FileVersion, ScanReport};
+use crate::report::{CompactScanReport, FileVersion, ScanReport};
 use std::path::{Path, PathBuf};
 
 /// Current on-disk format understood by [`ScanCache`].
@@ -100,5 +100,37 @@ impl ScanReport {
     #[must_use]
     pub fn to_cache(&self) -> ScanCache {
         ScanCache::from_report(self)
+    }
+}
+
+impl CompactScanReport {
+    /// Extracts reusable SHA-256 evidence without materializing absolute paths.
+    #[must_use]
+    pub fn to_cache(&self) -> ScanCache {
+        let entries = self
+            .files
+            .iter()
+            .filter_map(|file| {
+                let content = file.content.as_deref()?;
+                let content_hash = content
+                    .content_hash
+                    .as_deref()
+                    .filter(|hash| hash.starts_with("sha256:"))?
+                    .to_owned();
+                Some(ScanCacheEntry {
+                    relative: file.relative.to_string(),
+                    bytes: file.bytes,
+                    content_hash,
+                    content_fingerprint: content.content_fingerprint.as_deref()?.to_owned(),
+                    version: content.version,
+                    binary_checked: content.binary_checked,
+                })
+            })
+            .collect();
+        ScanCache {
+            format_version: SCAN_CACHE_FORMAT_VERSION,
+            root: self.root.clone(),
+            entries,
+        }
     }
 }

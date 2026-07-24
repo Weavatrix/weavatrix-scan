@@ -1,7 +1,8 @@
 use crate::config::ScanOptions;
 use crate::error::Result;
 use crate::report::ScanReport;
-use crate::scanner::scan_repository_with_options;
+use crate::runtime::ParallelRuntime;
+use crate::scanner::scan_repository_with_runtime;
 use std::path::PathBuf;
 
 /// Deterministic collection of independently rooted scan reports.
@@ -28,6 +29,7 @@ pub struct MultiScanner {
     roots: Vec<PathBuf>,
     options: ScanOptions,
     root_parallelism: usize,
+    runtime: ParallelRuntime,
 }
 
 impl MultiScanner {
@@ -37,6 +39,7 @@ impl MultiScanner {
             roots: vec![root.into()],
             options: ScanOptions::default(),
             root_parallelism: 0,
+            runtime: ParallelRuntime::global(),
         }
     }
 
@@ -59,6 +62,13 @@ impl MultiScanner {
         self
     }
 
+    /// Selects the executor shared by parallel discovery in every root.
+    #[must_use]
+    pub fn runtime(mut self, runtime: ParallelRuntime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     /// Scans all roots concurrently and returns them in insertion order.
     ///
     /// # Errors
@@ -70,7 +80,7 @@ impl MultiScanner {
     ///
     /// Panics if an internal root worker panics.
     pub fn scan(self) -> Result<MultiScanReport> {
-        let worker_count = if crate::pool::ThreadPool::is_worker_thread() {
+        let worker_count = if self.runtime.is_worker_thread() {
             1
         } else {
             root_worker_count(self.root_parallelism, self.roots.len())
@@ -79,7 +89,7 @@ impl MultiScanner {
             let reports = self
                 .roots
                 .iter()
-                .map(|root| scan_repository_with_options(root, &self.options, None))
+                .map(|root| scan_repository_with_runtime(root, &self.options, None, &self.runtime))
                 .collect::<Result<Vec<_>>>()?;
             return Ok(MultiScanReport { reports });
         }
@@ -91,11 +101,15 @@ impl MultiScanner {
                 .chunks(chunk_size)
                 .map(|chunk| {
                     let options = &self.options;
+                    let runtime = self.runtime.clone();
                     scope.spawn(move || {
                         chunk
                             .iter()
                             .map(|(index, root)| {
-                                (*index, scan_repository_with_options(root, options, None))
+                                (
+                                    *index,
+                                    scan_repository_with_runtime(root, options, None, &runtime),
+                                )
                             })
                             .collect::<Vec<_>>()
                     })

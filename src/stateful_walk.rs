@@ -1,8 +1,13 @@
+use crate::ParallelRuntime;
 use crate::walk_platform::{DirectoryIdentity, FileSystemId};
 use crate::walker::{WalkEntry, WalkError, WalkOptions, Walker};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+mod parallel;
+
+pub use parallel::ParallelStatefulWalker;
 
 type DirectoryProcessor<R, E> = Arc<
     dyn Fn(usize, &Path, &mut R, &mut Vec<Result<StatefulWalkEntry<E>, WalkError>>)
@@ -71,6 +76,8 @@ pub struct StatefulWalkBuilder<R, E> {
     options: WalkOptions,
     root_read_dir_state: R,
     processor: Option<DirectoryProcessor<R, E>>,
+    parallelism: usize,
+    runtime: ParallelRuntime,
 }
 
 impl<R, E> StatefulWalkBuilder<R, E>
@@ -85,12 +92,28 @@ where
             options: WalkOptions::default(),
             root_read_dir_state,
             processor: None,
+            parallelism: 0,
+            runtime: ParallelRuntime::global(),
         }
     }
 
     #[must_use]
     pub const fn options(mut self, options: WalkOptions) -> Self {
         self.options = options;
+        self
+    }
+
+    /// Sets parallel directory workers. Zero selects runtime parallelism.
+    #[must_use]
+    pub const fn with_parallelism(mut self, parallelism: usize) -> Self {
+        self.parallelism = parallelism;
+        self
+    }
+
+    /// Selects the executor used by parallel stateful traversal.
+    #[must_use]
+    pub fn runtime(mut self, runtime: ParallelRuntime) -> Self {
+        self.runtime = runtime;
         self
     }
 
@@ -118,6 +141,23 @@ where
     /// Returns an error when the root cannot be resolved or inspected.
     pub fn build(self) -> Result<StatefulWalker<R, E>, WalkError> {
         StatefulWalker::new(self)
+    }
+
+    /// Builds a bounded parallel iterator with strict depth-first output.
+    ///
+    /// Directory callbacks run on the selected executor over complete child
+    /// batches. Their mutated directory state is cloned into accepted child
+    /// tasks, while yielded entries retain callback-assigned entry state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a root-validation, coordinator-startup, or worker-submission
+    /// error.
+    pub fn build_parallel_ordered(
+        self,
+        capacity: usize,
+    ) -> Result<ParallelStatefulWalker<E>, WalkError> {
+        ParallelStatefulWalker::start(self, capacity)
     }
 }
 

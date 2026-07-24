@@ -1,6 +1,6 @@
 mod support;
 
-use jwalk::WalkDir as JWalkDir;
+use jwalk::{WalkDir as JWalkDir, WalkDirGeneric as JWalkDirGeneric};
 use std::path::{Path, PathBuf};
 use support::{
     BenchmarkCase, EXTENSIONS, Fixture, RAW_FILES, SOURCE_FILES, measure_group, print_measurement,
@@ -62,6 +62,12 @@ fn benchmark_directory_callbacks(fixture: &Fixture) {
         }),
         BenchmarkCase::new("weavatrix-stateful-batch", || {
             stateful_batch_file_count(&fixture.root)
+        }),
+        BenchmarkCase::new("weavatrix-stateful-batch-parallel", || {
+            parallel_stateful_batch_file_count(&fixture.root)
+        }),
+        BenchmarkCase::new("jwalk-stateful-batch", || {
+            jwalk_stateful_batch_file_count(&fixture.root)
         }),
     ];
     let results = measure_group(&mut cases);
@@ -227,6 +233,28 @@ fn stateful_batch_file_count(root: &Path) -> usize {
         .filter_map(Result::ok)
         .filter(StatefulWalkEntry::is_file)
         .filter(|entry| has_extension(entry.path()))
+        .count()
+}
+
+fn parallel_stateful_batch_file_count(root: &Path) -> usize {
+    StatefulWalkBuilder::<usize, ()>::new(root, 0)
+        .with_parallelism(0)
+        .process_read_dir(|_, _, directories, _| *directories += 1)
+        .build_parallel_ordered(1_024)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(StatefulWalkEntry::is_file)
+        .filter(|entry| has_extension(entry.path()))
+        .count()
+}
+
+fn jwalk_stateful_batch_file_count(root: &Path) -> usize {
+    JWalkDirGeneric::<(usize, ())>::new(root)
+        .process_read_dir(|_, _, directories, _| *directories += 1)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| has_extension(&entry.path()))
         .count()
 }
 

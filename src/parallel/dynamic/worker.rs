@@ -1,6 +1,6 @@
 use super::{BatchControl, DirectoryTask, Shared, TaskReport};
 use crate::control::CancellationToken;
-use crate::pool::ThreadPool;
+use crate::runtime::ParallelRuntime;
 use crate::walk_platform::FileSystemId;
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
 use std::path::PathBuf;
@@ -41,6 +41,13 @@ pub(super) fn stream_worker<F>(
 pub(super) fn abort_after_panic(shared: &Shared) {
     let mut state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
     state.active = state.active.saturating_sub(1);
+    state.stopped = true;
+    state.quit = true;
+    shared.ready.notify_all();
+}
+
+pub(super) fn abort_after_submit_error(shared: &Shared) {
+    let mut state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
     state.stopped = true;
     state.quit = true;
     shared.ready.notify_all();
@@ -276,8 +283,12 @@ fn finish_task(
     shared.ready.notify_all();
 }
 
-pub(super) fn worker_count(parallelism: usize, max_open: usize) -> usize {
-    let available = ThreadPool::global().workers();
+pub(super) fn worker_count(
+    runtime: &ParallelRuntime,
+    parallelism: usize,
+    max_open: usize,
+) -> usize {
+    let available = runtime.parallelism();
     let requested = if parallelism == 0 {
         available.min(if cfg!(windows) { 4 } else { 8 })
     } else {

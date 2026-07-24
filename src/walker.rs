@@ -29,6 +29,8 @@ pub(crate) enum DirectoryEntries {
 }
 
 impl DirectoryEntries {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn next(&mut self) -> Option<io::Result<fs::DirEntry>> {
         match self {
             Self::Open(entries) => entries.next(),
@@ -36,6 +38,8 @@ impl DirectoryEntries {
         }
     }
 
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) const fn is_open(&self) -> bool {
         matches!(self, Self::Open(_))
     }
@@ -77,6 +81,7 @@ pub struct Walker {
     pub(crate) skip_stdout: Option<crate::FileIdentity>,
     pub(crate) contents_first: bool,
     pub(crate) deferred_entry: Option<WalkEntry>,
+    pub(crate) plain_entries: bool,
 }
 
 impl Walker {
@@ -160,6 +165,14 @@ impl Walker {
         } else {
             (None, None)
         };
+        let plain_entries = !options.follow_links
+            && !options.same_file_system
+            && !options.collect_metadata
+            && options.max_depth.is_none()
+            && options.min_depth == 0
+            && filter.is_none()
+            && skip_stdout.is_none()
+            && !contents_first;
         let root = Arc::new(canonical.clone());
         Ok(Self {
             root: Arc::clone(&root),
@@ -182,6 +195,7 @@ impl Walker {
             skip_stdout,
             contents_first,
             deferred_entry: None,
+            plain_entries,
         })
     }
 
@@ -214,6 +228,11 @@ impl Walker {
     ) -> Self {
         let options = options.normalized();
         let root_components = root.components().count();
+        let plain_entries = !options.follow_links
+            && !options.same_file_system
+            && !options.collect_metadata
+            && options.max_depth.is_none()
+            && options.min_depth == 0;
         Self {
             root: Arc::clone(root),
             root_components,
@@ -240,6 +259,7 @@ impl Walker {
             skip_stdout: None,
             contents_first: false,
             deferred_entry: None,
+            plain_entries,
         }
     }
 

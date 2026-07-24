@@ -4,6 +4,31 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Add `ParallelRuntime` with process-global, fallibly created dedicated, and
+  application-owned executors, external busy-timeout propagation, typed
+  worker-submission failures, and reentrant callback safety across walker,
+  pull, scanner, and multi-root APIs.
+- Add parallel ordered `StatefulWalkBuilder` execution: complete directory
+  batches run on workers, callback-mutated state propagates to children, entry
+  state and pruning are preserved, and bounded output remains strict DFS.
+- Add `CompactScanReport` and direct `Scanner::scan_compact` discovery with one
+  retained root path and optional boxed rich evidence, avoiding absolute-path
+  and unused version/hash slots per metadata-only entry.
+- Correct and expand the competitor matrix with workload-specific winners,
+  million-file time/memory evidence, and explicit remaining API gaps.
+- Add redirected-stdout protection to every `ParallelWalker` output mode and
+  parallel multi-root traversal.
+- Add fallible unordered and ordered parallel pull startup APIs.
+- Add a reproducible large-scale profile covering raw streaming,
+  collected traversal, ignore-aware metadata manifests, rich SHA-256 scans,
+  ripgrep, exact `ignore` manifest verification, and peak working-set
+  measurements up to 1,000,000 files.
+- Add a plain-entry traversal fast path and consuming `WalkEntry::into_path`
+  API, closing the measured deep-tree raw-walk gap without weakening typed
+  errors or traversal limits.
+- Expand built-in file types to 265 named definitions and 678 patterns, a
+  tested strict superset of `ignore` 0.4.31, with deterministic catalog
+  introspection through `len()` and `names()`.
 - Replace FNV content/revision hashing with streaming SHA-256 and persist
   file-version evidence for safe incremental hash reuse.
 - Detect files changed between discovery and content completion, with typed

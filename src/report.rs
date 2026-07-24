@@ -35,6 +35,44 @@ pub struct ScannedFile {
     pub binary_checked: bool,
 }
 
+/// Selected-file evidence without a duplicated absolute path allocation.
+///
+/// Join `relative` to [`CompactScanReport::root`] only when an absolute path
+/// is needed.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactScannedFile {
+    pub relative: Box<str>,
+    pub bytes: u64,
+    /// Allocated only when content inspection was requested.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub content: Option<Box<CompactContentEvidence>>,
+}
+
+/// Optional rich evidence kept out of metadata-only compact entries.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactContentEvidence {
+    pub content_hash: Option<Box<str>>,
+    /// Whole-content validation fingerprint used only for strict cache reuse.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub content_fingerprint: Option<Box<str>>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub version: FileVersion,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub binary_checked: bool,
+}
+
+impl CompactScannedFile {
+    /// Returns the strong content hash when content hashing was requested.
+    #[must_use]
+    pub fn content_hash(&self) -> Option<&str> {
+        self.content
+            .as_deref()
+            .and_then(|content| content.content_hash.as_deref())
+    }
+}
+
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScanCacheStats {
@@ -135,6 +173,40 @@ pub struct ScanReport {
     pub cache: ScanCacheStats,
     #[cfg_attr(feature = "serde", serde(skip, default = "default_record_skipped"))]
     record_skipped: bool,
+}
+
+/// Memory-efficient deterministic manifest retaining the root path once.
+///
+/// This report preserves scanner selection, hashes, revision, warnings and
+/// typed skip evidence while avoiding one absolute `PathBuf` per selected
+/// file.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactScanReport {
+    #[cfg_attr(feature = "serde", serde(with = "crate::path_serde"))]
+    pub root: PathBuf,
+    pub files: Vec<CompactScannedFile>,
+    pub skipped: Vec<SkippedEntry>,
+    pub warnings: Vec<ScanWarning>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ignore_sources: Vec<IgnoreSourceEvidence>,
+    pub revision: String,
+    #[cfg_attr(feature = "serde", serde(default = "default_complete"))]
+    pub complete: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub termination: Option<ScanTermination>,
+    #[cfg_attr(feature = "serde", serde(default = "default_portable"))]
+    pub portable: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cache: ScanCacheStats,
+}
+
+impl CompactScanReport {
+    /// Materializes an absolute path for one compact entry.
+    #[must_use]
+    pub fn absolute_path(&self, file: &CompactScannedFile) -> PathBuf {
+        self.root.join(file.relative.as_ref())
+    }
 }
 
 #[cfg(feature = "serde")]

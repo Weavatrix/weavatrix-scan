@@ -4,10 +4,13 @@ mod support;
 
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::Duration;
 use support::Fixture;
 use weavatrix_scan::{
-    NamedFileTypes, ParallelMultiWalker, ParallelWalker, ScanOptions, Scanner, StatefulWalkBuilder,
-    WalkBuilder, WalkOptions, Walker,
+    NamedFileTypes, ParallelExecutor, ParallelJob, ParallelMultiWalker, ParallelRuntime,
+    ParallelWalker, ScanOptions, Scanner, StatefulWalkBuilder, WalkBuilder, WalkControl, WalkEvent,
+    WalkOperation, WalkOptions, Walker,
 };
 
 #[test]
@@ -25,6 +28,7 @@ fn low_level_walkers_accept_a_single_file_root() {
     assert!(serial[0].is_file());
     assert_eq!(serial[0].depth(), 0);
     assert_eq!(serial[0].bytes(), Some(13));
+    assert_eq!(serial[0].clone().into_path(), path);
 
     let parallel = ParallelWalker::new(&path).options(options).walk().unwrap();
     assert_eq!(parallel.entries.len(), 1);
@@ -42,6 +46,122 @@ fn low_level_walkers_accept_a_single_file_root() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(stateful.len(), 1);
+}
+
+struct RejectingExecutor;
+
+impl ParallelExecutor for RejectingExecutor {
+    fn parallelism(&self) -> usize {
+        4
+    }
+
+    fn try_execute(
+        &self,
+        _job: ParallelJob,
+        _busy_timeout: Option<Duration>,
+    ) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "external pool busy",
+        ))
+    }
+}
+
+#[test]
+fn external_pool_submission_failure_is_typed_and_does_not_hang() {
+    let fixture = Fixture::new("scan-external-reject");
+    for directory in 0..8 {
+        fixture.write(&format!("d{directory:02}/value.rs"), "fn value() {}\n");
+    }
+    let runtime = ParallelRuntime::external(Arc::new(RejectingExecutor))
+        .with_busy_timeout(Some(Duration::from_millis(1)));
+    let error = ParallelWalker::new(&fixture.root)
+        .with_parallelism(4)
+        .runtime(runtime.clone())
+        .walk()
+        .unwrap_err();
+    assert_eq!(error.operation(), WalkOperation::ScheduleWorker);
+    assert_eq!(error.io_error().kind(), std::io::ErrorKind::WouldBlock);
+
+    let scanner_error = Scanner::new(&fixture.root)
+        .options(
+            ScanOptions::default()
+                .metadata_only()
+                .with_traversal_parallelism(4),
+        )
+        .runtime(runtime)
+        .scan()
+        .unwrap_err();
+    assert!(scanner_error.to_string().contains("external pool busy"));
+}
+
+#[test]
+fn compact_manifest_matches_full_manifest_without_absolute_path_duplication() {
+    let fixture = Fixture::new("scan-compact-report");
+    fixture.write(".gitignore", "ignored/\n");
+    fixture.write("src/a.rs", "fn a() {}\n");
+    fixture.write("src/b.rs", "fn b() {}\n");
+    fixture.write("ignored/no.rs", "fn hidden() {}\n");
+    let options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .metadata_only()
+        .selected_files_only()
+        .with_traversal_parallelism(4);
+    let full = Scanner::new(&fixture.root)
+        .options(options.clone())
+        .scan()
+        .unwrap();
+    let compact = Scanner::new(&fixture.root)
+        .options(options)
+        .scan_compact()
+        .unwrap();
+
+    assert_eq!(compact.revision, full.revision);
+    assert_eq!(
+        compact
+            .files
+            .iter()
+            .map(|file| (file.relative.as_ref(), file.bytes))
+            .collect::<Vec<_>>(),
+        full.files
+            .iter()
+            .map(|file| (file.relative.as_str(), file.bytes))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        compact.absolute_path(&compact.files[0]),
+        full.files[0].absolute
+    );
+    assert!(
+        std::mem::size_of::<weavatrix_scan::CompactScannedFile>()
+            < std::mem::size_of::<weavatrix_scan::ScannedFile>()
+    );
+    assert!(compact.files.iter().all(|file| file.content.is_none()));
+
+    let rich_options = ScanOptions::default()
+        .with_extensions(["rs"])
+        .selected_files_only();
+    let rich_full = Scanner::new(&fixture.root)
+        .options(rich_options.clone())
+        .scan()
+        .unwrap();
+    let rich_compact = Scanner::new(&fixture.root)
+        .options(rich_options)
+        .scan_compact()
+        .unwrap();
+    assert_eq!(rich_compact.revision, rich_full.revision);
+    assert_eq!(
+        rich_compact
+            .files
+            .iter()
+            .map(weavatrix_scan::CompactScannedFile::content_hash)
+            .collect::<Vec<_>>(),
+        rich_full
+            .files
+            .iter()
+            .map(|file| file.content_hash.as_deref())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -89,6 +209,57 @@ fn built_in_file_types_support_composition_and_negation() {
 }
 
 #[test]
+fn built_in_catalog_is_a_strict_superset_of_ignore_defaults() {
+    let ours = NamedFileTypes::defaults();
+    let mut upstream = ignore::types::TypesBuilder::new();
+    upstream.add_defaults();
+    let upstream = upstream.definitions();
+    let missing = upstream
+        .iter()
+        .map(ignore::types::FileTypeDef::name)
+        .filter(|name| !ours.contains(name))
+        .collect::<Vec<_>>();
+    assert!(missing.is_empty(), "missing ignore file types: {missing:?}");
+    assert!(ours.len() > upstream.len());
+    assert!(ours.names().is_sorted());
+
+    let fixture = Fixture::new("scan-expanded-types");
+    fixture.write("infra/main.bicep", "resource storage 'x' = {}\n");
+    fixture.write(".github/workflows/check.yml", "jobs: {}\n");
+    fixture.write("shell/setup.nu", "let ready = true\n");
+    fixture.write("api/world.wit", "package example:world;\n");
+    fixture.write("src/main.rs", "fn main() {}\n");
+    let report = Scanner::new(&fixture.root)
+        .options(
+            ScanOptions::default()
+                .with_file_types(
+                    ours.with_composed_type(
+                        "modern",
+                        ["bicep", "github-actions", "nushell", "wit"],
+                    )
+                    .select(["modern"]),
+                )
+                .metadata_only(),
+        )
+        .scan()
+        .unwrap();
+    let files = report
+        .files
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        files,
+        [
+            ".github/workflows/check.yml",
+            "api/world.wit",
+            "infra/main.bicep",
+            "shell/setup.nu",
+        ]
+    );
+}
+
+#[test]
 fn parallel_raw_multi_root_walk_preserves_root_order() {
     let first = Fixture::new("scan-raw-multi-first");
     let second = Fixture::new("scan-raw-multi-second");
@@ -133,6 +304,60 @@ fn skip_stdout_excludes_redirected_output_file() {
                 .all(|entry| entry.file_name() != "redirected.txt")
         );
         assert!(entries.iter().any(|entry| entry.file_name() == "keep.rs"));
+
+        let parallel = ParallelWalker::new(&root).skip_stdout(true).walk().unwrap();
+        assert!(
+            parallel
+                .entries
+                .iter()
+                .all(|entry| entry.file_name() != "redirected.txt")
+        );
+
+        let redirected_seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let visitor_seen = std::sync::Arc::clone(&redirected_seen);
+        ParallelWalker::new(&root)
+            .skip_stdout(true)
+            .visit(move |event| {
+                if matches!(
+                    event,
+                    WalkEvent::Entry(entry) if entry.file_name() == "redirected.txt"
+                ) {
+                    visitor_seen.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                WalkControl::Continue
+            })
+            .unwrap();
+        assert!(!redirected_seen.load(std::sync::atomic::Ordering::Relaxed));
+
+        for entries in [
+            ParallelWalker::new(&root)
+                .skip_stdout(true)
+                .into_iter_bounded(8)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            ParallelWalker::new(&root)
+                .skip_stdout(true)
+                .into_iter_ordered_bounded(8)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+        ] {
+            assert!(
+                entries
+                    .iter()
+                    .all(|entry| entry.file_name() != "redirected.txt")
+            );
+        }
+
+        let multi = ParallelMultiWalker::new(&root)
+            .skip_stdout(true)
+            .walk()
+            .unwrap();
+        assert!(
+            multi.reports[0]
+                .entries
+                .iter()
+                .all(|entry| entry.file_name() != "redirected.txt")
+        );
         return;
     }
 

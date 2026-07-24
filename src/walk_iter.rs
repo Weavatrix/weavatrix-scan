@@ -4,6 +4,7 @@ use crate::walker::Walker;
 impl Iterator for Walker {
     type Item = Result<WalkEntry, WalkError>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         'walk: loop {
             if self.finished {
@@ -13,27 +14,10 @@ impl Iterator for Walker {
                 return Some(Ok(entry));
             }
             if self.yield_root {
-                self.yield_root = false;
-                let root = self.root.as_ref().clone();
-                let entry = self.visit(
-                    root,
-                    0,
-                    Some(self.root_file_type.expect("root metadata is present")),
-                    self.root_bytes,
-                    self.root_version,
-                );
-                match entry {
-                    Ok(entry) => {
-                        if self.prepare_entry(entry) {
-                            continue;
-                        }
-                        if let Some(entry) = self.deferred_entry.take() {
-                            return Some(Ok(entry));
-                        }
-                        continue;
-                    }
-                    Err(error) => return Some(self.yield_error(error)),
+                if let Some(entry) = self.take_root_entry() {
+                    return Some(entry);
                 }
+                continue;
             }
             if let Some(error) = self.schedule_pending_directory() {
                 return Some(self.yield_error(error));
@@ -73,6 +57,9 @@ impl Iterator for Walker {
                         return Some(self.yield_error(error));
                     }
                 };
+                if self.plain_entries {
+                    return Some(Ok(self.visit_plain(path, depth, file_type)));
+                }
                 let (bytes, version) = if self.options.collect_metadata && file_type.is_file() {
                     match entry.metadata() {
                         Ok(metadata) => (
@@ -90,8 +77,8 @@ impl Iterator for Walker {
                 };
                 match self.visit(path, depth, Some(file_type), bytes, version) {
                     Ok(entry) => {
-                        if self.prepare_entry(entry) {
-                            continue 'walk;
+                        if let Some(entry) = self.prepare_entry(entry) {
+                            return Some(Ok(entry));
                         }
                         continue 'walk;
                     }
@@ -103,13 +90,35 @@ impl Iterator for Walker {
 }
 
 impl Walker {
-    fn prepare_entry(&mut self, entry: WalkEntry) -> bool {
+    fn take_root_entry(&mut self) -> Option<Result<WalkEntry, WalkError>> {
+        self.yield_root = false;
+        let root = self.root.as_ref().clone();
+        if self.plain_entries {
+            return Some(Ok(self.visit_plain(
+                root,
+                0,
+                self.root_file_type.expect("root metadata is present"),
+            )));
+        }
+        match self.visit(
+            root,
+            0,
+            Some(self.root_file_type.expect("root metadata is present")),
+            self.root_bytes,
+            self.root_version,
+        ) {
+            Ok(entry) => self.prepare_entry(entry).map(Ok),
+            Err(error) => Some(self.yield_error(error)),
+        }
+    }
+
+    fn prepare_entry(&mut self, entry: WalkEntry) -> Option<WalkEntry> {
         if entry.is_file()
             && self.skip_stdout.is_some_and(|identity| {
                 crate::stdout::path_matches(entry.path(), identity).unwrap_or(false)
             })
         {
-            return false;
+            return None;
         }
         let accepted = self.filter.as_ref().is_none_or(|filter| filter(&entry));
         if !accepted {
@@ -119,7 +128,7 @@ impl Walker {
                     self.finished = true;
                 }
             }
-            return false;
+            return None;
         }
         if self.contents_first && entry.is_dir() && entry.skip_reason().is_none() {
             if entry.depth() >= self.options.min_depth
@@ -127,13 +136,12 @@ impl Walker {
             {
                 pending.post_entry = Some(entry);
             }
-            return false;
+            return None;
         }
         if entry.depth() >= self.options.min_depth {
-            self.deferred_entry = Some(entry);
-            true
+            Some(entry)
         } else {
-            false
+            None
         }
     }
 }

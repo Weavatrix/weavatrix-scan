@@ -3,7 +3,7 @@ use crate::error::{Error, Result};
 use crate::file_version::from_metadata;
 use crate::ignore::{RepositoryMatch, RepositoryMatcher};
 use crate::path::normalized_relative_path;
-use crate::report::{ScanReport, ScannedFile, SkipKind};
+use crate::report::{FileVersion, ScanReport, ScannedFile, SkipKind};
 use crate::scan_match::skip_match;
 use crate::walker::{WalkEntry, WalkError, WalkOperation, WalkSkipReason};
 use std::fs;
@@ -15,6 +15,40 @@ pub(super) fn process_entry(
     report: &mut ScanReport,
     matcher: &mut RepositoryMatcher,
 ) -> Result<bool> {
+    let mut selected = None;
+    let skip = process_entry_with(
+        entry,
+        options,
+        report,
+        matcher,
+        |path, relative, bytes, version| {
+            selected = Some(ScannedFile {
+                absolute: path.to_path_buf(),
+                relative,
+                bytes,
+                content_hash: None,
+                content_fingerprint: None,
+                version,
+                binary_checked: false,
+            });
+        },
+    )?;
+    if let Some(file) = selected {
+        report.files.push(file);
+    }
+    Ok(skip)
+}
+
+pub(super) fn process_entry_with<F>(
+    entry: &WalkEntry,
+    options: &ScanOptions,
+    report: &mut ScanReport,
+    matcher: &mut RepositoryMatcher,
+    mut selected: F,
+) -> Result<bool>
+where
+    F: FnMut(&Path, String, u64, FileVersion),
+{
     let relative_path = entry.relative_path();
     let relative = normalized_relative_path(relative_path);
     if entry.depth() == 0 {
@@ -66,17 +100,22 @@ pub(super) fn process_entry(
         decision == RepositoryMatch::OverrideInclude,
         options,
         report,
+        &mut selected,
     )?;
     Ok(false)
 }
 
-fn process_file(
+fn process_file<F>(
     entry: &WalkEntry,
     relative: String,
     override_include: bool,
     options: &ScanOptions,
     report: &mut ScanReport,
-) -> Result<()> {
+    selected: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&Path, String, u64, FileVersion),
+{
     let path = entry.path();
     if !override_include && !options.accepts_extension(path, &relative) {
         report.skip(relative, SkipKind::Extension, None);
@@ -106,15 +145,7 @@ fn process_file(
         );
         return Ok(());
     }
-    report.files.push(ScannedFile {
-        absolute: path.to_path_buf(),
-        relative,
-        bytes,
-        content_hash: None,
-        content_fingerprint: None,
-        version,
-        binary_checked: false,
-    });
+    selected(path, relative, bytes, version);
     Ok(())
 }
 
@@ -169,6 +200,7 @@ const fn operation_label(operation: WalkOperation) -> &'static str {
         WalkOperation::ReadDirectory => "read directory",
         WalkOperation::ReadEntry => "read entry",
         WalkOperation::ReadMetadata => "read metadata",
+        WalkOperation::ScheduleWorker => "schedule worker",
     }
 }
 

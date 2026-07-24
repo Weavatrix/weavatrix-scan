@@ -71,15 +71,24 @@ impl ParallelWalker {
         F: for<'entry> Fn(WalkEvent<'entry>) -> WalkControl + Send + Sync + 'static,
     {
         self.options = self.options.normalized();
-        if crate::pool::ThreadPool::is_worker_thread() {
-            return visit_serial(&self.root, self.options, cancellation, visitor);
+        if self.runtime.is_worker_thread() {
+            visit_serial(
+                &self.root,
+                self.options,
+                self.skip_stdout,
+                cancellation,
+                visitor,
+            )
+        } else {
+            dynamic::visit(
+                &self.root,
+                self.options,
+                self.parallelism,
+                &self.runtime,
+                self.skip_stdout,
+                cancellation,
+                visitor,
+            )
         }
-        dynamic::visit(
-            &self.root,
-            self.options,
-            self.parallelism,
-            cancellation,
-            visitor,
-        )
     }
 }

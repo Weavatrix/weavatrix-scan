@@ -6,6 +6,39 @@ use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
 
 impl Walker {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(crate) fn visit_plain(
+        &mut self,
+        path: PathBuf,
+        depth: usize,
+        file_type: FileType,
+    ) -> WalkEntry {
+        let is_symlink = file_type.is_symlink();
+        let is_file = !is_symlink && file_type.is_file();
+        let is_directory = !is_symlink && file_type.is_dir();
+        if is_directory {
+            self.pending_directory = Some(PendingDirectory {
+                path: path.clone(),
+                depth,
+                identity: None,
+                post_entry: None,
+            });
+        }
+        WalkEntry {
+            root_components: self.root_components,
+            path,
+            depth,
+            is_file,
+            is_directory,
+            is_symlink,
+            bytes: None,
+            version: None,
+            directory_identity: None,
+            skip_reason: None,
+        }
+    }
+
     pub(crate) fn visit(
         &mut self,
         path: PathBuf,

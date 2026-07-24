@@ -12,6 +12,7 @@ mod cache;
 mod config;
 mod content;
 mod control;
+mod default_file_types;
 mod delta;
 mod error;
 mod file_types;
@@ -29,6 +30,7 @@ mod path_serde;
 mod pool;
 mod portable_report;
 mod report;
+mod runtime;
 mod scan_finalize;
 mod scan_limits;
 mod scan_match;
@@ -67,13 +69,17 @@ pub use portable_report::{
     PortableSkippedEntry,
 };
 pub use report::{
-    FileIdentity, FileVersion, IgnoreSourceEvidence, IgnoreSourceKind, ScanCacheStats, ScanReport,
-    ScanTermination, ScanWarning, ScannedFile, SkipKind, SkippedEntry,
+    CompactContentEvidence, CompactScanReport, CompactScannedFile, FileIdentity, FileVersion,
+    IgnoreSourceEvidence, IgnoreSourceKind, ScanCacheStats, ScanReport, ScanTermination,
+    ScanWarning, ScannedFile, SkipKind, SkippedEntry,
 };
+pub use runtime::{ParallelExecutor, ParallelJob, ParallelRuntime};
 pub use scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
-pub use scanner::{Scanner, scan_repository};
+pub use scanner::{Scanner, scan_repository, scan_repository_compact};
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
-pub use stateful_walk::{StatefulWalkBuilder, StatefulWalkEntry, StatefulWalker};
+pub use stateful_walk::{
+    ParallelStatefulWalker, StatefulWalkBuilder, StatefulWalkEntry, StatefulWalker,
+};
 pub use walk_builder::{MultiWalker, WalkBuilder};
 pub use walker::{
     ErrorPolicy, RootSymlinkPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions,

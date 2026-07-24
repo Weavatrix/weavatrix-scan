@@ -1,4 +1,4 @@
-use crate::{ParallelWalkReport, ParallelWalker, WalkError, WalkOptions};
+use crate::{ParallelRuntime, ParallelWalkReport, ParallelWalker, WalkError, WalkOptions};
 use std::path::PathBuf;
 
 /// Collected raw walk reports for independent roots in insertion order.
@@ -25,6 +25,8 @@ pub struct ParallelMultiWalker {
     options: WalkOptions,
     root_parallelism: usize,
     traversal_parallelism: usize,
+    skip_stdout: bool,
+    runtime: ParallelRuntime,
 }
 
 impl ParallelMultiWalker {
@@ -35,6 +37,8 @@ impl ParallelMultiWalker {
             options: WalkOptions::default(),
             root_parallelism: 0,
             traversal_parallelism: 0,
+            skip_stdout: false,
+            runtime: ParallelRuntime::global(),
         }
     }
 
@@ -64,6 +68,20 @@ impl ParallelMultiWalker {
         self
     }
 
+    /// Selects the executor shared by all active roots.
+    #[must_use]
+    pub fn runtime(mut self, runtime: ParallelRuntime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    /// Skips a regular file that refers to redirected standard output.
+    #[must_use]
+    pub const fn skip_stdout(mut self, enabled: bool) -> Self {
+        self.skip_stdout = enabled;
+        self
+    }
+
     /// Walks every root and returns reports in insertion order.
     ///
     /// # Errors
@@ -75,7 +93,7 @@ impl ParallelMultiWalker {
     ///
     /// Panics if an internal root worker panics.
     pub fn walk(self) -> Result<ParallelMultiWalkReport, WalkError> {
-        let worker_count = if crate::pool::ThreadPool::is_worker_thread() {
+        let worker_count = if self.runtime.is_worker_thread() {
             1
         } else {
             root_worker_count(self.root_parallelism, self.roots.len())
@@ -88,6 +106,8 @@ impl ParallelMultiWalker {
                     ParallelWalker::new(root)
                         .options(self.options)
                         .with_parallelism(self.traversal_parallelism)
+                        .runtime(self.runtime.clone())
+                        .skip_stdout(self.skip_stdout)
                         .walk()
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -109,6 +129,8 @@ impl ParallelMultiWalker {
                                     ParallelWalker::new(root)
                                         .options(self.options)
                                         .with_parallelism(self.traversal_parallelism)
+                                        .runtime(self.runtime.clone())
+                                        .skip_stdout(self.skip_stdout)
                                         .walk(),
                                 )
                             })

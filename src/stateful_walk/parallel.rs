@@ -1,151 +1,171 @@
-use super::ParallelWalker;
-use super::pull::{ParallelWalkIter, PullBatch};
+use super::{DirectoryProcessor, StatefulWalkBuilder, StatefulWalkEntry};
 use crate::control::CancellationToken;
-use crate::runtime::ParallelRuntime;
 use crate::walk_platform::{DirectoryIdentity, FileSystemId};
-use crate::walker::{
-    ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions, WalkSkipReason, Walker,
+use crate::{
+    ErrorPolicy, ParallelRuntime, WalkError, WalkOperation, WalkOptions, WalkSkipReason, Walker,
 };
 use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{self, SyncSender, sync_channel};
+use std::sync::mpsc::{self, Receiver, SyncSender, sync_channel};
+use std::thread::JoinHandle;
 
-struct DirectoryTask {
+struct DirectoryTask<R> {
     id: u64,
     path: PathBuf,
     depth: usize,
     identity: Option<DirectoryIdentity>,
     ancestors: Arc<HashSet<DirectoryIdentity>>,
+    read_state: R,
 }
 
-struct WorkerResult {
+struct WorkerResult<R, E> {
     id: u64,
-    outcome: Result<DirectoryBatch, Box<dyn Any + Send>>,
+    outcome: Result<DirectoryBatch<R, E>, Box<dyn Any + Send>>,
 }
 
-struct DirectoryBatch {
-    entries: Vec<Result<WalkEntry, WalkError>>,
+struct DirectoryBatch<R, E> {
+    entries: Vec<Result<StatefulWalkEntry<E>, WalkError>>,
+    child_state: R,
     ancestors: Arc<HashSet<DirectoryIdentity>>,
 }
 
-struct PreparedItem {
-    item: Result<WalkEntry, WalkError>,
+struct PreparedItem<E> {
+    item: Result<StatefulWalkEntry<E>, WalkError>,
     child: Option<u64>,
 }
 
-struct DirectoryFrame {
-    items: std::vec::IntoIter<PreparedItem>,
+struct DirectoryFrame<E> {
+    items: std::vec::IntoIter<PreparedItem<E>>,
 }
 
-struct OrderedScheduler {
+struct OrderedStatefulScheduler<R, E> {
     root: Arc<PathBuf>,
     root_file_system: Option<FileSystemId>,
     options: WalkOptions,
+    processor: Option<DirectoryProcessor<R, E>>,
     cancellation: CancellationToken,
     runtime: ParallelRuntime,
     limit: usize,
     next_id: u64,
-    queued: VecDeque<DirectoryTask>,
+    queued: VecDeque<DirectoryTask<R>>,
     outstanding: usize,
-    ready: HashMap<u64, DirectoryBatch>,
-    result_sender: mpsc::Sender<WorkerResult>,
-    result_receiver: mpsc::Receiver<WorkerResult>,
+    ready: HashMap<u64, DirectoryBatch<R, E>>,
+    result_sender: mpsc::Sender<WorkerResult<R, E>>,
+    result_receiver: mpsc::Receiver<WorkerResult<R, E>>,
     schedule_error: Option<WalkError>,
 }
 
-impl ParallelWalker {
-    /// Starts bounded parallel traversal and yields entries in strict,
-    /// deterministic depth-first order.
-    ///
-    /// Directory reads are prefetched up to `max_open` and the configured
-    /// parallelism. A capacity of zero is normalized to one.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the coordinator thread cannot be created. Use
-    /// [`Self::try_into_iter_ordered_bounded`] for fallible startup.
-    #[must_use]
-    pub fn into_iter_ordered_bounded(self, capacity: usize) -> ParallelWalkIter {
-        self.try_into_iter_ordered_bounded(capacity)
-            .expect("ordered parallel pull coordinator thread can be created")
-    }
+/// Bounded stateful pull iterator with parallel directory processing and
+/// strict deterministic depth-first output.
+pub struct ParallelStatefulWalker<E> {
+    receiver: Option<Receiver<Result<StatefulWalkEntry<E>, WalkError>>>,
+    cancellation: CancellationToken,
+    coordinator: Option<JoinHandle<()>>,
+}
 
-    /// Fallible form of [`Self::into_iter_ordered_bounded`].
-    ///
-    /// # Errors
-    ///
-    /// Returns the coordinator thread spawn error.
-    pub fn try_into_iter_ordered_bounded(self, capacity: usize) -> io::Result<ParallelWalkIter> {
-        let capacity = capacity.max(1);
-        let (sender, receiver) = sync_channel(capacity.saturating_sub(1));
+impl<E> ParallelStatefulWalker<E> {
+    pub(super) fn start<R>(
+        builder: StatefulWalkBuilder<R, E>,
+        capacity: usize,
+    ) -> Result<Self, WalkError>
+    where
+        R: Clone + Send + 'static,
+        E: Default + Send + 'static,
+    {
+        let root = builder.root.clone();
+        let use_serial = builder.runtime.is_worker_thread();
+        let (sender, receiver) = sync_channel(capacity.max(1));
         let cancellation = CancellationToken::new();
         let coordinator_cancellation = cancellation.clone();
-        let use_serial = self.runtime.is_worker_thread();
         let coordinator = std::thread::Builder::new()
-            .name("weavatrix-scan-ordered-pull".to_owned())
+            .name("weavatrix-scan-stateful".to_owned())
             .spawn(move || {
                 if use_serial {
-                    ordered_serial(&self, &coordinator_cancellation, &sender);
+                    run_serial(builder, &coordinator_cancellation, &sender);
                 } else {
-                    ordered_parallel(&self, &coordinator_cancellation, &sender);
+                    run_parallel(builder, &coordinator_cancellation, &sender);
                 }
-            })?;
-        Ok(ParallelWalkIter::from_coordinator(
-            receiver,
+            })
+            .map_err(|source| WalkError::new(root, 0, WalkOperation::ScheduleWorker, source))?;
+        Ok(Self {
+            receiver: Some(receiver),
             cancellation,
-            coordinator,
-        ))
+            coordinator: Some(coordinator),
+        })
+    }
+
+    fn join_coordinator(&mut self) {
+        if let Some(coordinator) = self.coordinator.take() {
+            coordinator
+                .join()
+                .expect("parallel stateful coordinator panicked");
+        }
     }
 }
 
-fn ordered_serial(
-    walker: &ParallelWalker,
+impl<E> Iterator for ParallelStatefulWalker<E> {
+    type Item = Result<StatefulWalkEntry<E>, WalkError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Ok(item) = self.receiver.as_ref()?.recv() {
+            Some(item)
+        } else {
+            self.receiver.take();
+            self.join_coordinator();
+            None
+        }
+    }
+}
+
+impl<E> Drop for ParallelStatefulWalker<E> {
+    fn drop(&mut self) {
+        self.receiver.take();
+        self.cancellation.cancel();
+        self.join_coordinator();
+    }
+}
+
+fn run_serial<R, E>(
+    builder: StatefulWalkBuilder<R, E>,
     cancellation: &CancellationToken,
-    sender: &SyncSender<PullBatch>,
-) {
-    let error_policy = walker.options.error_policy;
-    let skip_stdout = walker.skip_stdout;
-    let mut options = walker.options.normalized();
-    options.error_policy = ErrorPolicy::Continue;
-    let mut walker = match Walker::with_options(&walker.root, options) {
+    sender: &SyncSender<Result<StatefulWalkEntry<E>, WalkError>>,
+) where
+    R: Clone + Send + 'static,
+    E: Default + Send + 'static,
+{
+    let walker = match builder.build() {
         Ok(walker) => walker,
         Err(error) => {
-            let _ = sender.send(vec![Err(error)]);
+            let _ = sender.send(Err(error));
             return;
         }
     };
-    while !cancellation.is_cancelled() {
-        let Some(item) = walker.next() else {
-            break;
-        };
-        let abort = error_policy == ErrorPolicy::Abort && item.is_err();
-        let visible = match item.as_ref() {
-            Ok(entry) => !super::matches_stdout(entry, skip_stdout),
-            Err(_) => true,
-        };
-        if (visible && sender.send(vec![item]).is_err()) || abort {
+    for item in walker {
+        if cancellation.is_cancelled() || sender.send(item).is_err() {
             break;
         }
     }
 }
 
 #[allow(clippy::too_many_lines)]
-fn ordered_parallel(
-    walker: &ParallelWalker,
+fn run_parallel<R, E>(
+    builder: StatefulWalkBuilder<R, E>,
     cancellation: &CancellationToken,
-    sender: &SyncSender<PullBatch>,
-) {
-    let options = walker.options.normalized();
+    sender: &SyncSender<Result<StatefulWalkEntry<E>, WalkError>>,
+) where
+    R: Clone + Send + 'static,
+    E: Default + Send + 'static,
+{
+    let options = builder.options.normalized();
     let mut root_options = options;
     root_options.min_depth = 0;
     root_options.error_policy = ErrorPolicy::Continue;
-    let mut root_walker = match Walker::with_options(&walker.root, root_options) {
+    let mut root_walker = match Walker::with_options(&builder.root, root_options) {
         Ok(walker) => walker,
         Err(error) => {
-            let _ = sender.send(vec![Err(error)]);
+            let _ = sender.send(Err(error));
             return;
         }
     };
@@ -157,30 +177,37 @@ fn ordered_parallel(
     {
         Ok(entry) => entry,
         Err(error) => {
-            let _ = sender.send(vec![Err(error)]);
+            let _ = sender.send(Err(error));
             return;
         }
     };
     let root_identity = root_entry.directory_identity();
-    let root_can_descend = root_entry.is_dir() && root_entry.skip_reason().is_none();
+    let can_descend = root_entry.is_dir() && root_entry.skip_reason().is_none();
     if root_entry.depth() >= options.min_depth
-        && !super::matches_stdout(&root_entry, walker.skip_stdout)
-        && sender.send(vec![Ok(root_entry)]).is_err()
+        && sender
+            .send(Ok(StatefulWalkEntry {
+                read_children: can_descend,
+                entry: root_entry,
+                state: E::default(),
+            }))
+            .is_err()
     {
         return;
     }
-    if !root_can_descend || cancellation.is_cancelled() {
+    if !can_descend || cancellation.is_cancelled() {
         return;
     }
 
     let (result_sender, result_receiver) = mpsc::channel();
-    let mut scheduler = OrderedScheduler {
+    let limit = requested_workers(&builder.runtime, builder.parallelism, options.max_open);
+    let mut scheduler = OrderedStatefulScheduler {
         root: Arc::clone(&root),
         root_file_system,
         options,
+        processor: builder.processor,
         cancellation: cancellation.clone(),
-        runtime: walker.runtime.clone(),
-        limit: super::requested_workers(&walker.runtime, walker.parallelism, options.max_open),
+        runtime: builder.runtime,
+        limit,
         next_id: 1,
         queued: VecDeque::new(),
         outstanding: 0,
@@ -199,13 +226,14 @@ fn ordered_parallel(
         depth: 0,
         identity: root_identity,
         ancestors: Arc::new(ancestors),
+        read_state: builder.root_read_dir_state,
     });
     scheduler.refill();
     let root_batch = match scheduler.wait_for(0) {
         Ok(Some(batch)) => batch,
         Ok(None) => return,
         Err(error) => {
-            let _ = sender.send(vec![Err(error)]);
+            let _ = sender.send(Err(error));
             return;
         }
     };
@@ -225,12 +253,7 @@ fn ordered_parallel(
             .as_ref()
             .map_or(true, |entry| entry.depth() >= options.min_depth);
         let abort = options.error_policy == ErrorPolicy::Abort && prepared.item.is_err();
-        let visible = visible
-            && match prepared.item.as_ref() {
-                Ok(entry) => !super::matches_stdout(entry, walker.skip_stdout),
-                Err(_) => true,
-            };
-        if visible && sender.send(vec![prepared.item]).is_err() {
+        if visible && sender.send(prepared.item).is_err() {
             scheduler.cancel_and_drain();
             return;
         }
@@ -243,7 +266,7 @@ fn ordered_parallel(
                 Ok(Some(batch)) => batch,
                 Ok(None) => return,
                 Err(error) => {
-                    let _ = sender.send(vec![Err(error)]);
+                    let _ = sender.send(Err(error));
                     return;
                 }
             };
@@ -253,7 +276,11 @@ fn ordered_parallel(
     scheduler.cancel_and_drain();
 }
 
-impl OrderedScheduler {
+impl<R, E> OrderedStatefulScheduler<R, E>
+where
+    R: Clone + Send + 'static,
+    E: Default + Send + 'static,
+{
     fn refill(&mut self) {
         while !self.cancellation.is_cancelled() && self.outstanding < self.limit {
             let Some(task) = self.queued.pop_front() else {
@@ -264,10 +291,18 @@ impl OrderedScheduler {
             let cancellation = self.cancellation.clone();
             let root_file_system = self.root_file_system;
             let options = self.options;
+            let processor = self.processor.clone();
             let scheduled = self.runtime.try_execute(move || {
                 let id = task.id;
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    read_directory(&root, root_file_system, options, &cancellation, task)
+                    read_directory(
+                        &root,
+                        root_file_system,
+                        options,
+                        &cancellation,
+                        processor.as_ref(),
+                        task,
+                    )
                 }));
                 let _ = result_sender.send(WorkerResult { id, outcome });
             });
@@ -288,7 +323,7 @@ impl OrderedScheduler {
         }
     }
 
-    fn wait_for(&mut self, id: u64) -> Result<Option<DirectoryBatch>, WalkError> {
+    fn wait_for(&mut self, id: u64) -> Result<Option<DirectoryBatch<R, E>>, WalkError> {
         if let Some(batch) = self.ready.remove(&id) {
             return Ok(Some(batch));
         }
@@ -332,34 +367,30 @@ impl OrderedScheduler {
         }
     }
 
-    fn prepare_frame(&mut self, mut batch: DirectoryBatch) -> DirectoryFrame {
-        batch.entries.sort_by(|left, right| {
-            let left_path = left
-                .as_ref()
-                .map_or_else(|error| error.path(), WalkEntry::path);
-            let right_path = right
-                .as_ref()
-                .map_or_else(|error| error.path(), WalkEntry::path);
-            left_path.cmp(right_path)
-        });
+    fn prepare_frame(&mut self, batch: DirectoryBatch<R, E>) -> DirectoryFrame<E> {
         let mut items = Vec::with_capacity(batch.entries.len());
         let mut children = Vec::new();
         for item in batch.entries {
             let child = item.as_ref().ok().and_then(|entry| {
-                (entry.is_dir() && entry.skip_reason().is_none()).then(|| {
+                entry.read_children.then(|| {
                     let id = self.next_id;
                     self.next_id = self.next_id.saturating_add(1);
-                    let identity = entry.directory_identity();
-                    let mut ancestors = batch.ancestors.as_ref().clone();
-                    if let Some(identity) = identity {
-                        ancestors.insert(identity);
-                    }
+                    let identity = entry.entry.directory_identity();
+                    let ancestors = identity.map_or_else(
+                        || Arc::clone(&batch.ancestors),
+                        |identity| {
+                            let mut child = batch.ancestors.as_ref().clone();
+                            child.insert(identity);
+                            Arc::new(child)
+                        },
+                    );
                     children.push(DirectoryTask {
                         id,
                         path: entry.path().to_path_buf(),
                         depth: entry.depth(),
                         identity,
-                        ancestors: Arc::new(ancestors),
+                        ancestors,
+                        read_state: batch.child_state.clone(),
                     });
                     id
                 })
@@ -387,13 +418,18 @@ impl OrderedScheduler {
     }
 }
 
-fn read_directory(
+fn read_directory<R, E>(
     root: &Arc<PathBuf>,
     root_file_system: Option<FileSystemId>,
     options: WalkOptions,
     cancellation: &CancellationToken,
-    task: DirectoryTask,
-) -> DirectoryBatch {
+    processor: Option<&DirectoryProcessor<R, E>>,
+    mut task: DirectoryTask<R>,
+) -> DirectoryBatch<R, E>
+where
+    R: Clone + Send + 'static,
+    E: Default + Send + 'static,
+{
     let ancestors = Arc::clone(&task.ancestors);
     let mut worker_options = options;
     worker_options.error_policy = ErrorPolicy::Continue;
@@ -407,7 +443,7 @@ fn read_directory(
     );
     let mut walker = Walker::from_known_directory_with_ancestry(
         root,
-        task.path,
+        task.path.clone(),
         task.depth,
         worker_options,
         root_file_system,
@@ -432,10 +468,31 @@ fn read_directory(
                 if entry.is_dir() {
                     walker.skip_current_dir();
                 }
-                entries.push(Ok(entry));
+                entries.push(Ok(StatefulWalkEntry {
+                    read_children: entry.is_dir() && entry.skip_reason().is_none(),
+                    entry,
+                    state: E::default(),
+                }));
             }
             Err(error) => entries.push(Err(error)),
         }
     }
-    DirectoryBatch { entries, ancestors }
+    if let Some(processor) = processor {
+        processor(task.depth, &task.path, &mut task.read_state, &mut entries);
+    }
+    DirectoryBatch {
+        entries,
+        child_state: task.read_state,
+        ancestors,
+    }
+}
+
+fn requested_workers(runtime: &ParallelRuntime, parallelism: usize, max_open: usize) -> usize {
+    let available = runtime.parallelism();
+    let requested = if parallelism == 0 {
+        available.min(if cfg!(windows) { 16 } else { 8 })
+    } else {
+        parallelism.min(available)
+    };
+    requested.min(max_open.max(1)).max(1)
 }

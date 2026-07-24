@@ -37,7 +37,7 @@ impl Default for WalkOptions {
         Self {
             min_depth: 0,
             max_depth: None,
-            max_open: 64,
+            max_open: Self::DEFAULT_MAX_OPEN,
             same_file_system: false,
             follow_links: false,
             collect_metadata: false,
@@ -48,6 +48,9 @@ impl Default for WalkOptions {
 }
 
 impl WalkOptions {
+    /// Default hard upper bound for simultaneously open directory handles.
+    pub const DEFAULT_MAX_OPEN: usize = 64;
+
     #[must_use]
     pub const fn with_min_depth(mut self, min_depth: usize) -> Self {
         self.min_depth = min_depth;
@@ -113,6 +116,7 @@ pub enum WalkOperation {
     ReadDirectory,
     ReadEntry,
     ReadMetadata,
+    ScheduleWorker,
 }
 
 #[derive(Debug)]
@@ -214,6 +218,12 @@ impl WalkEntry {
         &self.path
     }
 
+    /// Consumes the entry and returns its owned path without cloning.
+    #[must_use]
+    pub fn into_path(self) -> PathBuf {
+        self.path
+    }
+
     #[must_use]
     pub fn relative_path(&self) -> &Path {
         let mut components = self.path.components();
@@ -290,5 +300,6 @@ const fn operation_name(operation: WalkOperation) -> &'static str {
         WalkOperation::ReadDirectory => "read directory",
         WalkOperation::ReadEntry => "read entry",
         WalkOperation::ReadMetadata => "read metadata",
+        WalkOperation::ScheduleWorker => "schedule worker",
     }
 }

@@ -114,29 +114,29 @@ fn checked_path_len(actual: &Paths, expected: &Paths) -> usize {
 }
 
 fn walker_paths(root: &Path) -> Paths {
-    let mut paths = Walker::with_options(root, WalkOptions::default())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(WalkEntry::is_file)
-        .filter(|entry| has_extension(entry.path()))
-        .map(|entry| entry.relative_path().to_path_buf())
-        .collect::<Vec<_>>();
-    paths.sort_unstable();
-    paths
+    relative_paths(
+        root,
+        Walker::with_options(root, WalkOptions::default())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(WalkEntry::is_file)
+            .filter(|entry| has_extension(entry.path()))
+            .map(WalkEntry::into_path),
+    )
 }
 
 fn parallel_paths(root: &Path) -> Paths {
-    let mut paths = ParallelWalker::new(root)
-        .walk()
-        .unwrap()
-        .entries
-        .into_iter()
-        .filter(WalkEntry::is_file)
-        .filter(|entry| has_extension(entry.path()))
-        .map(|entry| entry.relative_path().to_path_buf())
-        .collect::<Vec<_>>();
-    paths.sort_unstable();
-    paths
+    relative_paths(
+        root,
+        ParallelWalker::new(root)
+            .walk()
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter(WalkEntry::is_file)
+            .filter(|entry| has_extension(entry.path()))
+            .map(WalkEntry::into_path),
+    )
 }
 
 fn ignore_paths(root: &Path) -> Paths {
