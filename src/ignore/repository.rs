@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 /// Paths may be absolute or relative to the configured scan root. Directory
 /// rule files are loaded once and cached, which makes repeated incremental
 /// checks cheap without walking the repository again.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RepositoryMatcher {
     pub(super) scan_root: PathBuf,
     pub(super) options: ScanOptions,
@@ -210,6 +210,29 @@ impl RepositoryMatcher {
     pub fn is_ignored(&mut self, path: impl AsRef<Path>, is_directory: bool) -> Result<bool> {
         self.matched(path, is_directory)
             .map(RepositoryMatch::is_ignored)
+    }
+
+    /// Normalizes a path and returns its lossless root-relative representation.
+    ///
+    /// Relative inputs are interpreted from this matcher's root. Absolute
+    /// inputs outside the root and paths containing parent traversal are
+    /// rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path escapes the configured scan root.
+    pub fn normalize(&self, path: impl AsRef<Path>) -> Result<PathBuf> {
+        let absolute = self.absolute_path(path.as_ref())?;
+        self.ensure_scan_scope(&absolute)?;
+        absolute
+            .strip_prefix(&self.scan_root)
+            .map(Path::to_path_buf)
+            .map_err(|_| {
+                Error::io(
+                    &absolute,
+                    io::Error::new(io::ErrorKind::InvalidInput, "path escapes matcher root"),
+                )
+            })
     }
 
     /// Preloads a directory's rules for subsequent child checks.

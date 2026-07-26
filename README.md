@@ -37,6 +37,8 @@ layers:
 - `ParallelMultiWalker`: collected or direct-streaming traversal across
   concurrent raw roots with ordered per-root reports;
 - `RepositoryMatcher`: cached path selection for incremental consumers;
+- `SelectionMatcher`: the complete scanner selection policy as a reusable,
+  typed standalone matcher;
 - `ParallelWalker`: bounded adaptive traversal for broad or skewed trees.
 - `ParallelRuntime`: process-global, dedicated, or application-owned execution
   shared by walker and scanner APIs.
@@ -55,8 +57,8 @@ walker workload:
 | Raw parallel streaming | **Weavatrix `ParallelWalker`** | 264.7 ms and 7.6 MiB peak on the measured 1,000,000-file Windows fixture |
 | Minimal serial traversal | **walkdir / Weavatrix `Walker`** | walkdir remains the small established primitive; Walker measured 546.3 ms versus 584.5 ms with comparable 5 MiB-class memory |
 | Memory-efficient deterministic manifest | **Weavatrix `CompactScanReport`** | Exact output parity at 1,019.4 ms / 63.2 MiB; `ignore` used 56.4 MiB but took 2,106.7 ms and does not produce revision/evidence |
-| Git-ignore matcher ecosystem | **ignore** | Reference implementation and broader production history; Weavatrix continuously checks exact manifest parity against it |
-| Host-owned parallel scheduling | **Weavatrix / jwalk** | Weavatrix accepts any fallible executor plus busy-timeout policy or creates an owned pool; jwalk has direct Rayon pool modes |
+| Reusable selection matcher | **Weavatrix / ignore** | Weavatrix combines ignore, overrides, types, depth, size, symlink and filesystem policy with typed outcomes; `ignore` exposes modular matcher builders |
+| Host-owned parallel scheduling | **Weavatrix / jwalk** | Weavatrix accepts any fallible executor, optionally wraps existing/new Rayon pools directly, and preserves busy-timeout policy |
 
 | Capability | weavatrix-scan | ignore | walkdir | jwalk |
 | --- | :---: | :---: | :---: | :---: |
@@ -70,7 +72,7 @@ walker workload:
 | Custom ignore files | Yes | Yes | No | No |
 | Repository / Git-compatible ignore modes | Yes | Yes | No | No |
 | Override globs / source switches | Yes | Yes | No | No |
-| Reusable cached matcher | Yes | Yes | No | No |
+| Reusable cached full selection matcher | Yes | Yes | No | No |
 | Multi-root / custom sort | Serial + parallel / full `DirEntry` | Yes / name or path, serial only | No / full `DirEntry` | No / mutable directory batch |
 | Directory callback / contents-first | Parallel typed batch / Yes | Filter only / No | Filter / Yes | Parallel typed batch / No |
 | Built-in types / composition / negation | 265 / Yes / Yes | 224 / Yes / Yes | No | No |
@@ -134,21 +136,28 @@ and macOS; the million-file profile remains opt-in.
 
 ```toml
 [dependencies]
-weavatrix-scan = "0.3"
+weavatrix-scan = "0.4"
 ```
 
 Enable serialization only when needed:
 
 ```toml
 [dependencies]
-weavatrix-scan = { version = "0.3", features = ["serde"] }
+weavatrix-scan = { version = "0.4", features = ["serde"] }
 ```
 
 Enable direct conversion from `notify::Event` without making a watcher runtime
 mandatory for other users:
 
 ```toml
-weavatrix-scan = { version = "0.3", features = ["notify"] }
+weavatrix-scan = { version = "0.4", features = ["notify"] }
+```
+
+Enable direct existing/new Rayon pool integration without changing the default
+scheduler:
+
+```toml
+weavatrix-scan = { version = "0.4", features = ["rayon"] }
 ```
 
 The default build has no third-party runtime dependency on Unix. Windows uses
@@ -347,6 +356,10 @@ println!("selected={}", manifest.files.len());
 executor receives each boxed job and the optional busy timeout, and can reject
 submission with `io::Error`; traversal reports that as
 `WalkOperation::ScheduleWorker` without waiting for an unsubmitted worker.
+With the optional `rayon` feature,
+`ParallelRuntime::{rayon_existing, rayon_new}` provides the same contract
+without requiring an application wrapper. Busy timeout cancels a queued job if
+the Rayon pool does not start it before the deadline.
 
 Consumers that prefer pull semantics can use a bounded iterator. A full buffer
 applies backpressure to traversal workers, and dropping the iterator cancels and
@@ -652,9 +665,26 @@ assert_eq!(first.revision, second.revision);
 # Ok::<(), weavatrix_scan::Error>(())
 ```
 
-Long-lived file watchers can keep a `RepositoryMatcher` and call `refresh()`
-after an ignore input changes. Refresh builds a replacement matcher first, so a
-failure leaves the existing matcher usable.
+Long-lived file watchers that only need ignore decisions can keep a
+`RepositoryMatcher`. Consumers that need the exact Scanner selection contract
+can use `SelectionMatcher`; it additionally applies depth, symlink, standard
+directory, named type, extension, maximum-size, and filesystem-boundary policy:
+
+```rust
+use weavatrix_scan::{ScanOptions, SelectionMatcher};
+
+let options = ScanOptions::default().with_extensions(["rs", "go", "ts", "py"]);
+let mut matcher = SelectionMatcher::with_options(".", &options)?;
+let decision = matcher.matched("src/lib.rs")?;
+assert!(decision.is_selected());
+# Ok::<(), weavatrix_scan::Error>(())
+```
+
+`SelectionMatcher::matched_entry` reuses metadata already present in a
+Weavatrix `WalkEntry`, while `matched` safely classifies an isolated existing
+path and its ancestors. Matchers are cloneable for worker-local incremental
+queries. Both matcher types expose `refresh()`. Refresh builds a replacement
+ignore matcher first, so a failure leaves the existing matcher usable.
 
 `WatcherEventAdapter` converts create/modify/remove/rename notifications from
 any watcher library into sorted relative `WatchPlan` invalidations. Events
@@ -888,24 +918,24 @@ fully sorted native relative-path set; the ignore-aware comparison additionally
 checks the same normalized path-and-size manifest.
 
 Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
-2026-07-24 against `ignore` 0.4.31, `walkdir` 2.5.0, and `jwalk` 0.8.1:
+2026-07-26 against `ignore` 0.4.31, `walkdir` 2.5.0, and `jwalk` 0.8.1:
 
 | Mode | Library | Files | Median |
 | --- | --- | ---: | ---: |
-| Raw paths | weavatrix `Walker` | 6,004 | 29.0 ms |
-| Raw paths | weavatrix `ParallelWalker` | 6,004 | 14.5 ms |
-| Raw paths | ignore | 6,004 | 34.7 ms |
-| Raw paths | walkdir | 6,004 | 31.9 ms |
-| Raw paths | jwalk | 6,004 | 20.2 ms |
-| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 55.8 ms |
-| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 32.9 ms |
-| Ignore-aware manifest | ignore | 6,001 | 62.6 ms |
-| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 237.1 ms |
+| Raw paths | weavatrix `Walker` | 6,004 | 16.5 ms |
+| Raw paths | weavatrix `ParallelWalker` | 6,004 | 10.2 ms |
+| Raw paths | ignore | 6,004 | 17.3 ms |
+| Raw paths | walkdir | 6,004 | 15.4 ms |
+| Raw paths | jwalk | 6,004 | 10.8 ms |
+| Ignore-aware manifest | weavatrix `Scanner` serial | 6,001 | 35.2 ms |
+| Ignore-aware manifest | weavatrix `Scanner` parallel | 6,001 | 20.7 ms |
+| Ignore-aware manifest | ignore | 6,001 | 37.4 ms |
+| Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 146.2 ms |
 
 Each row is the median of five independent process medians. Every process runs
 11 interleaved output-equivalent samples after two warmups. On this measurement
-`ParallelWalker` was 28.1% faster than `jwalk`; the parallel
-selected-manifest `Scanner` was 47.5% faster than `ignore`. The rich row
+`ParallelWalker` was 5.9% faster than `jwalk`; the parallel
+selected-manifest `Scanner` was 44.7% faster than `ignore`. The rich row
 additionally reads content, detects binaries, computes SHA-256 hashes, captures
 snapshot evidence, and records typed exclusions. Absolute timings vary by
 filesystem, cache, antivirus, CPU, and operating system; the benchmark workflow

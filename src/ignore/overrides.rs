@@ -2,7 +2,7 @@ use super::{IgnoreError, RepositoryMatch, RuleAction, RuleSet, parse_file, sourc
 use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind};
 use std::path::Path;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct OverrideRules {
     rules: RuleSet,
     has_includes: bool,
