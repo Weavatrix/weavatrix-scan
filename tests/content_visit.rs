@@ -569,7 +569,7 @@ fn buffered_parallel_discovery_preserves_streaming_content_results() {
                 }
             })
             .unwrap();
-        let mut paths = Arc::try_unwrap(paths).unwrap().into_inner().unwrap();
+        let mut paths = paths.lock().unwrap().clone();
         paths.sort_unstable();
         (paths, report)
     };
