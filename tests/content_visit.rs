@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use support::Fixture;
 use weavatrix_scan::{
-    CancellationToken, ChangedContentVisitOutcome, ContentFileStatus, ContentVisitControl,
-    ContentVisitEvent, ContentVisitMode, MultiScanner, ParallelExecutor, ParallelJob,
-    ParallelRuntime, ScanOptions, ScanTermination, Scanner, SkipKind, WatchPlan,
+    CancellationToken, ChangedContentVisitOutcome, ContentDiscoveryMode, ContentFileStatus,
+    ContentVisitControl, ContentVisitEvent, ContentVisitMode, MultiScanner, ParallelExecutor,
+    ParallelJob, ParallelRuntime, ScanOptions, ScanTermination, Scanner, SkipKind, WatchPlan,
 };
 
 #[derive(Default)]
@@ -531,6 +531,58 @@ fn streaming_content_visit_omits_manifest_revision_but_keeps_byte_evidence() {
     assert_eq!(report.completed, 2);
     assert_eq!(report.cache.content_reads, 2);
     assert_eq!(hashes.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn buffered_parallel_discovery_preserves_streaming_content_results() {
+    let fixture = Fixture::new("buffered-parallel-content");
+    fixture.write("src/a.rs", "fn a() {}\n");
+    fixture.write("src/nested/b.rs", "fn b() {}\n");
+    fixture.write("src/ignored.txt", "not selected\n");
+
+    let visit = |mode| {
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let report = Scanner::new(&fixture.root)
+            .options(
+                ScanOptions::default()
+                    .with_extensions(["rs"])
+                    .selected_files_only()
+                    .with_traversal_parallelism(2)
+                    .with_content_parallelism(2)
+                    .with_content_discovery(mode),
+            )
+            .visit_content_streaming({
+                let paths = Arc::clone(&paths);
+                move |_| {
+                    let paths = Arc::clone(&paths);
+                    move |event| {
+                        if let ContentVisitEvent::FileEnd {
+                            file,
+                            status: ContentFileStatus::Selected,
+                            ..
+                        } = event
+                        {
+                            paths.lock().unwrap().push(file.relative.to_owned());
+                        }
+                        ContentVisitControl::Continue
+                    }
+                }
+            })
+            .unwrap();
+        let mut paths = Arc::try_unwrap(paths).unwrap().into_inner().unwrap();
+        paths.sort_unstable();
+        (paths, report)
+    };
+
+    let (streaming_paths, streaming) = visit(ContentDiscoveryMode::Streaming);
+    let (parallel_paths, parallel) = visit(ContentDiscoveryMode::BufferedParallel);
+
+    assert_eq!(parallel_paths, streaming_paths);
+    assert_eq!(parallel.discovered, streaming.discovered);
+    assert_eq!(parallel.completed, streaming.completed);
+    assert_eq!(parallel.bytes_emitted, streaming.bytes_emitted);
+    assert_eq!(parallel.mode, ContentVisitMode::Streaming);
+    assert!(parallel.revision.is_empty());
 }
 
 #[test]

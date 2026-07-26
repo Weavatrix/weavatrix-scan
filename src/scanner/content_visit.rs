@@ -148,7 +148,10 @@ impl Scanner {
         Visitor:
             for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
     {
-        if self.options.limits.max_total_bytes.is_none() && !self.runtime.is_worker_thread() {
+        if self.options.limits.max_total_bytes.is_none()
+            && self.options.content_discovery == crate::ContentDiscoveryMode::Streaming
+            && !self.runtime.is_worker_thread()
+        {
             return visit_content_direct(self, root_index, mode, factory);
         }
         let mut discovery_options = self.options.clone();

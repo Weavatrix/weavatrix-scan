@@ -477,12 +477,13 @@ binary detection and optional SHA-256 evidence:
 
 ```rust
 use weavatrix_scan::{
-    ContentFileStatus, ContentValidationPolicy, ContentVisitControl,
-    ContentVisitEvent, ScanOptions, Scanner,
+    ContentDiscoveryMode, ContentFileStatus, ContentValidationPolicy,
+    ContentVisitControl, ContentVisitEvent, ScanOptions, Scanner,
 };
 
 let options = ScanOptions::default()
     .with_extensions(["rs", "go", "ts", "py"])
+    .with_content_discovery(ContentDiscoveryMode::BufferedParallel)
     .with_content_validation(ContentValidationPolicy::Strict);
 
 let summary = Scanner::new(".")
@@ -520,6 +521,14 @@ after the read; `Fast` keeps the safe opened-handle check but omits the
 post-read check for latency-sensitive local search. A deterministic total-byte
 budget automatically uses the compact two-phase path so budget selection
 remains path-order stable.
+
+`ContentDiscoveryMode::Streaming` is the constant-memory default: one serial
+producer overlaps discovery with bounded content readers.
+`BufferedParallel` uses the parallel ignore-aware walker, retains only compact
+candidate evidence, then dispatches the same verified readers. Choose it for
+minimum latency on wide or warm repositories; Search and index builders can
+sort their durable results after the callback. Both modes use the same
+selection, validation, binary, error, and cancellation contracts.
 
 `visit_content_streaming` keeps the same byte, validation, cancellation, hash,
 and binary contracts but does not retain compact selected-file evidence or
@@ -743,6 +752,7 @@ from "unreadable" or "outside the repository."
 | `hash_file_contents` | `true` | Attach per-file hashes and content-sensitive revision |
 | `cache_validation` | `Fast` | Trust file-version evidence, or verify a whole-content fingerprint in `Strict` mode |
 | `content_validation` | `Strict` | Verify newly opened content before and after reading, or omit the post-read check in `Fast` mode |
+| `content_discovery` | `Streaming` | Constant-memory overlapped discovery, or compact `BufferedParallel` discovery for minimum latency |
 | `detect_binary_files` | `true` | Reject files containing a NUL byte |
 | `evidence` | `Complete` | Keep all typed exclusions, or only selected files |
 | `parallelism` | `0` | Traversal/content workers; zero uses bounded available parallelism |

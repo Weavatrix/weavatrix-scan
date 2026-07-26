@@ -53,8 +53,8 @@ mod watch_notify;
 
 pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
 pub use config::{
-    CacheValidationPolicy, ContentValidationPolicy, EvidenceMode, IgnorePolicy, ScanLimits,
-    ScanOptions, StandardSkips,
+    CacheValidationPolicy, ContentDiscoveryMode, ContentValidationPolicy, EvidenceMode,
+    IgnorePolicy, ScanLimits, ScanOptions, StandardSkips,
 };
 pub use content_visit::{
     ChangedContentVisitOutcome, ChangedContentVisitReport, ContentFile, ContentFileStatus,

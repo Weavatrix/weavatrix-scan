@@ -62,6 +62,21 @@ pub enum ContentValidationPolicy {
     Strict,
 }
 
+/// Controls how content candidates are discovered before bounded file reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentDiscoveryMode {
+    /// Discover candidates serially and overlap discovery with content reads.
+    ///
+    /// This keeps memory bounded independently of the number of files.
+    Streaming,
+    /// Discover candidates with the parallel walker, retain their compact path
+    /// evidence, then dispatch bounded content reads.
+    ///
+    /// This minimizes latency on large, warm repositories at the cost of
+    /// memory proportional to the number of selected files.
+    BufferedParallel,
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ScanOptions {
@@ -100,6 +115,8 @@ pub struct ScanOptions {
     pub cache_validation: CacheValidationPolicy,
     /// New content-read validation policy.
     pub content_validation: ContentValidationPolicy,
+    /// Candidate-discovery policy for content visits.
+    pub content_discovery: ContentDiscoveryMode,
     /// Low-level traversal policy.
     pub walk: WalkOptions,
 }
@@ -129,6 +146,7 @@ impl Default for ScanOptions {
             cancellation: None,
             cache_validation: CacheValidationPolicy::Fast,
             content_validation: ContentValidationPolicy::Strict,
+            content_discovery: ContentDiscoveryMode::Streaming,
             walk: WalkOptions::default().with_metadata(true),
         }
     }
@@ -241,6 +259,13 @@ impl ScanOptions {
     #[must_use]
     pub const fn with_content_parallelism(mut self, parallelism: usize) -> Self {
         self.content_parallelism = Some(parallelism);
+        self
+    }
+
+    /// Sets candidate discovery for content visits.
+    #[must_use]
+    pub const fn with_content_discovery(mut self, mode: ContentDiscoveryMode) -> Self {
+        self.content_discovery = mode;
         self
     }
 

@@ -382,7 +382,7 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
 name = "weavatrix-scan"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ignore",
  "jwalk",
