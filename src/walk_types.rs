@@ -208,6 +208,7 @@ pub struct WalkEntry {
     pub(crate) is_symlink: bool,
     pub(crate) bytes: Option<u64>,
     pub(crate) version: Option<FileVersion>,
+    pub(crate) hidden: Option<bool>,
     pub(crate) directory_identity: Option<DirectoryIdentity>,
     pub(crate) skip_reason: Option<WalkSkipReason>,
 }
@@ -271,6 +272,10 @@ impl WalkEntry {
     #[must_use]
     pub const fn version(&self) -> Option<FileVersion> {
         self.version
+    }
+
+    pub(crate) const fn hidden(&self) -> Option<bool> {
+        self.hidden
     }
 
     #[must_use]

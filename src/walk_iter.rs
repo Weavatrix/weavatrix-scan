@@ -60,11 +60,14 @@ impl Iterator for Walker {
                 if self.plain_entries {
                     return Some(Ok(self.visit_plain(path, depth, file_type)));
                 }
-                let (bytes, version) = if self.options.collect_metadata && file_type.is_file() {
+                let (bytes, version, hidden) = if self.options.collect_metadata
+                    && file_type.is_file()
+                {
                     match entry.metadata() {
                         Ok(metadata) => (
                             Some(metadata.len()),
                             Some(crate::file_version::from_metadata(&metadata)),
+                            Some(crate::hidden::is_hidden_metadata(&path, &metadata)),
                         ),
                         Err(source) => {
                             let error =
@@ -73,9 +76,9 @@ impl Iterator for Walker {
                         }
                     }
                 } else {
-                    (None, None)
+                    (None, None, None)
                 };
-                match self.visit(path, depth, Some(file_type), bytes, version) {
+                match self.visit(path, depth, Some(file_type), bytes, version, hidden) {
                     Ok(entry) => {
                         if let Some(entry) = self.prepare_entry(entry) {
                             return Some(Ok(entry));
@@ -106,6 +109,7 @@ impl Walker {
             Some(self.root_file_type.expect("root metadata is present")),
             self.root_bytes,
             self.root_version,
+            None,
         ) {
             Ok(entry) => self.prepare_entry(entry).map(Ok),
             Err(error) => Some(self.yield_error(error)),

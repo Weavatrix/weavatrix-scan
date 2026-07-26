@@ -73,7 +73,8 @@ where
 
     if entry.is_dir() {
         let parent = entry.path().parent().unwrap_or(entry.path());
-        let decision = matcher.matched_prepared(&relative, parent, entry.path(), true);
+        let decision =
+            matcher.matched_prepared(&relative, parent, entry.path(), true, entry.hidden());
         if skip_match(report, relative.clone(), decision) {
             return Ok(true);
         }
@@ -90,7 +91,7 @@ where
         return Ok(false);
     }
     let parent = entry.path().parent().unwrap_or(entry.path());
-    let decision = matcher.matched_prepared(&relative, parent, entry.path(), false);
+    let decision = matcher.matched_prepared(&relative, parent, entry.path(), false, entry.hidden());
     if skip_match(report, relative.clone(), decision) {
         return Ok(false);
     }

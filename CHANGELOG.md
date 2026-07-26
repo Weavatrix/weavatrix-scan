@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-26
+
+- Reuse already-collected Windows file metadata when applying hidden-file
+  policy, removing a redundant filesystem metadata query per selected entry
+  without changing dotfile, Windows-hidden, ignore, or override semantics.
+
 ## 0.4.0 - 2026-07-26
 
 - Add `SelectionMatcher`, a reusable typed API that applies the scanner's

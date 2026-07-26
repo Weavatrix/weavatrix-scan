@@ -34,6 +34,7 @@ impl Walker {
             is_symlink,
             bytes: None,
             version: None,
+            hidden: None,
             directory_identity: None,
             skip_reason: None,
         }
@@ -46,6 +47,7 @@ impl Walker {
         file_type: Option<FileType>,
         mut bytes: Option<u64>,
         mut version: Option<FileVersion>,
+        mut hidden: Option<bool>,
     ) -> Result<WalkEntry, WalkError> {
         let file_type = entry_file_type(&path, depth, file_type)?;
         let is_symlink = file_type.is_symlink();
@@ -61,8 +63,7 @@ impl Walker {
             is_file = metadata.is_file();
             is_directory = metadata.is_dir();
             if self.options.collect_metadata && is_file {
-                bytes = Some(metadata.len());
-                version = Some(crate::file_version::from_metadata(&metadata));
+                (bytes, version, hidden) = metadata_evidence(&path, &metadata);
             }
             Some(metadata)
         } else {
@@ -149,6 +150,7 @@ impl Walker {
             is_symlink,
             bytes,
             version,
+            hidden,
             directory_identity,
             skip_reason,
         })
@@ -164,6 +166,17 @@ impl Walker {
         }
         Err(error)
     }
+}
+
+fn metadata_evidence(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> (Option<u64>, Option<FileVersion>, Option<bool>) {
+    (
+        Some(metadata.len()),
+        Some(crate::file_version::from_metadata(metadata)),
+        Some(crate::hidden::is_hidden_metadata(path, metadata)),
+    )
 }
 
 fn entry_file_type(

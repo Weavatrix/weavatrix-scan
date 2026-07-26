@@ -16,6 +16,27 @@ pub(crate) fn is_hidden(path: &Path) -> bool {
     false
 }
 
+pub(crate) fn is_hidden_with_hint(path: &Path, hidden: Option<bool>) -> bool {
+    path.file_name().is_some_and(name_starts_with_dot) || hidden.unwrap_or_else(|| is_hidden(path))
+}
+
+pub(crate) fn is_hidden_metadata(path: &Path, metadata: &std::fs::Metadata) -> bool {
+    if path.file_name().is_some_and(name_starts_with_dot) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        winapi_util::file::is_hidden(u64::from(metadata.file_attributes()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 #[cfg(unix)]
 fn name_starts_with_dot(name: &std::ffi::OsStr) -> bool {
     use std::os::unix::ffi::OsStrExt as _;

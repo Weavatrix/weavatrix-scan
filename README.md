@@ -932,6 +932,11 @@ Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
 | Ignore-aware manifest | ignore | 6,001 | 37.4 ms |
 | Rich SHA-256 manifest | weavatrix `Scanner` | 6,000 | 146.2 ms |
 
+On Windows, 0.4.1 reuses the file metadata already collected by the walker
+when applying the hidden-attribute policy. This removes a redundant metadata
+query per selected entry; hidden, ignore, override, and manifest results are
+unchanged.
+
 Each row is the median of five independent process medians. Every process runs
 11 interleaved output-equivalent samples after two warmups. On this measurement
 `ParallelWalker` was 5.9% faster than `jwalk`; the parallel

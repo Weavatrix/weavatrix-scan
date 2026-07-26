@@ -6,7 +6,7 @@ use super::{
 };
 use crate::config::{IgnorePolicy, ScanOptions};
 use crate::error::{Error, Result};
-use crate::hidden::is_hidden;
+use crate::hidden::is_hidden_with_hint;
 use crate::path::normalized_relative_path;
 use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind, ScanWarning};
 use std::borrow::Cow;
@@ -199,6 +199,7 @@ impl RepositoryMatcher {
             &parent,
             &absolute,
             is_directory,
+            None,
         ))
     }
 
@@ -288,6 +289,7 @@ impl RepositoryMatcher {
         parent: &Path,
         absolute: &Path,
         is_directory: bool,
+        hidden: Option<bool>,
     ) -> RepositoryMatch {
         let override_match = self.overrides.matched(scan_relative, is_directory);
         if override_match != RepositoryMatch::None {
@@ -302,7 +304,9 @@ impl RepositoryMatcher {
         match match_rules(&candidate, is_directory, rules) {
             Some(RuleAction::Ignore) => RepositoryMatch::Ignore,
             Some(RuleAction::Include) => RepositoryMatch::Include,
-            None if self.skip_hidden && is_hidden(absolute) => RepositoryMatch::Hidden,
+            None if self.skip_hidden && is_hidden_with_hint(absolute, hidden) => {
+                RepositoryMatch::Hidden
+            }
             None => RepositoryMatch::None,
         }
     }
