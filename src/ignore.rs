@@ -63,7 +63,7 @@ struct IgnoreLayer {
     parent: Option<Arc<IgnoreLayer>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct RuleSet {
     rules: Vec<IgnoreRule>,
     exact_anywhere: HashMap<String, Vec<usize>>,
@@ -72,7 +72,7 @@ struct RuleSet {
     generic: Vec<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct IgnoreRule {
     pattern: String,
     action: RuleAction,

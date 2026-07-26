@@ -37,6 +37,7 @@ mod scan_limits;
 mod scan_match;
 mod scan_stream;
 mod scanner;
+mod selection;
 mod snapshot;
 mod stateful_walk;
 mod stdout;
@@ -82,9 +83,12 @@ pub use report::{
     IgnoreSourceEvidence, IgnoreSourceKind, ScanCacheStats, ScanReport, ScanTermination,
     ScanWarning, ScannedFile, SkipKind, SkippedEntry,
 };
+#[cfg(feature = "rayon")]
+pub use runtime::RayonExecutor;
 pub use runtime::{ParallelExecutor, ParallelJob, ParallelRuntime};
 pub use scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
 pub use scanner::{Scanner, scan_repository, scan_repository_compact};
+pub use selection::{SelectionDecision, SelectionDisposition, SelectionMatcher};
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
 pub use stateful_walk::{
     ParallelStatefulWalker, StatefulWalkBuilder, StatefulWalkEntry, StatefulWalker,

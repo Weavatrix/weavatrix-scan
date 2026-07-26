@@ -6,6 +6,8 @@ use std::fmt;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+#[cfg(feature = "rayon")]
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 thread_local! {
@@ -31,6 +33,77 @@ pub trait ParallelExecutor: Send + Sync + 'static {
     /// Returns an I/O error when the pool is closed, saturated past
     /// `busy_timeout`, or otherwise cannot accept the job.
     fn try_execute(&self, job: ParallelJob, busy_timeout: Option<Duration>) -> io::Result<()>;
+}
+
+/// Ready-to-use adapter for an application-owned Rayon pool.
+#[cfg(feature = "rayon")]
+#[derive(Clone)]
+pub struct RayonExecutor {
+    pool: Arc<rayon::ThreadPool>,
+}
+
+#[cfg(feature = "rayon")]
+impl RayonExecutor {
+    /// Wraps an existing Rayon pool.
+    #[must_use]
+    pub fn new(pool: Arc<rayon::ThreadPool>) -> Self {
+        Self { pool }
+    }
+
+    /// Returns the wrapped pool.
+    #[must_use]
+    pub fn pool(&self) -> &Arc<rayon::ThreadPool> {
+        &self.pool
+    }
+}
+
+#[cfg(feature = "rayon")]
+impl ParallelExecutor for RayonExecutor {
+    fn parallelism(&self) -> usize {
+        self.pool.current_num_threads().max(1)
+    }
+
+    fn try_execute(&self, job: ParallelJob, busy_timeout: Option<Duration>) -> io::Result<()> {
+        let Some(timeout) = busy_timeout else {
+            self.pool.spawn(job);
+            return Ok(());
+        };
+        let pending = Arc::new(Mutex::new(Some(job)));
+        let worker_pending = Arc::clone(&pending);
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        self.pool.spawn(move || {
+            let job = worker_pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(job) = job {
+                let _ = started_sender.send(());
+                job();
+            }
+        });
+        match started_receiver.recv_timeout(timeout) {
+            Ok(()) => Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let cancelled = pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                    .is_some();
+                if cancelled {
+                    Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Rayon pool did not start the job before busy timeout",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Rayon pool dropped the scheduled job",
+            )),
+        }
+    }
 }
 
 enum Executor {
@@ -79,6 +152,34 @@ impl ParallelRuntime {
     #[must_use]
     pub fn external(executor: Arc<dyn ParallelExecutor>) -> Self {
         Self::new(Executor::External(executor), None)
+    }
+
+    /// Uses an existing application-owned Rayon pool.
+    ///
+    /// A one-second busy timeout is enabled by default to reject nested
+    /// single-thread pool starvation. Override it with
+    /// [`Self::with_busy_timeout`] when the application has a stronger
+    /// scheduling guarantee.
+    #[cfg(feature = "rayon")]
+    #[must_use]
+    pub fn rayon_existing(pool: Arc<rayon::ThreadPool>) -> Self {
+        Self::external(Arc::new(RayonExecutor::new(pool)))
+            .with_busy_timeout(Some(Duration::from_secs(1)))
+    }
+
+    /// Creates a dedicated Rayon pool with exactly `parallelism.max(1)`
+    /// workers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Rayon cannot create the requested worker pool.
+    #[cfg(feature = "rayon")]
+    pub fn rayon_new(parallelism: usize) -> io::Result<Self> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(parallelism.max(1))
+            .build()
+            .map_err(io::Error::other)?;
+        Ok(Self::rayon_existing(Arc::new(pool)))
     }
 
     /// Supplies the maximum wait an external executor may use to accept work.
@@ -222,5 +323,55 @@ mod tests {
             .try_execute(move || sender.send(nested.is_worker_thread()).unwrap())
             .unwrap();
         assert!(receiver.recv().unwrap());
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn rayon_runtime_uses_existing_pool() {
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .unwrap(),
+        );
+        let runtime = ParallelRuntime::rayon_existing(Arc::clone(&pool));
+        let (sender, receiver) = mpsc::channel();
+        runtime
+            .try_execute(move || sender.send(11).unwrap())
+            .unwrap();
+        assert_eq!(receiver.recv().unwrap(), 11);
+        assert_eq!(runtime.parallelism(), 2);
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn rayon_busy_timeout_cancels_unstarted_job() {
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap(),
+        );
+        let (block_sender, block_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        pool.spawn(move || {
+            block_sender.send(()).unwrap();
+            release_receiver.recv().unwrap();
+        });
+        block_receiver.recv().unwrap();
+
+        let runtime = ParallelRuntime::rayon_existing(pool)
+            .with_busy_timeout(Some(Duration::from_millis(10)));
+        let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_executed = Arc::clone(&executed);
+        let error = runtime
+            .try_execute(move || {
+                worker_executed.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        release_sender.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

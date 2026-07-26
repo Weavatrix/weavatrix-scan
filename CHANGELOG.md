@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.4.0 - 2026-07-26
+
+- Add `SelectionMatcher`, a reusable typed API that applies the scanner's
+  complete depth, symlink, standard-directory, file-type, extension, size,
+  ignore, and override selection policy to standalone paths or existing
+  `WalkEntry` values.
+- Add lossless root-relative `RepositoryMatcher::normalize`.
+- Add the optional `rayon` feature with ready-to-use existing/new Rayon pool
+  constructors and cancellable busy-timeout admission while preserving the
+  dependency-light default build.
+
 ## 0.3.0 - 2026-07-24
 
 - Enable `notify`'s native macOS backend, identify redirected Unix stdout from
