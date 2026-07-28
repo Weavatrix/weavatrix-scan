@@ -290,7 +290,7 @@ pub(super) fn worker_count(
 ) -> usize {
     let available = runtime.parallelism();
     let requested = if parallelism == 0 {
-        available.min(if cfg!(windows) { 4 } else { 8 })
+        available.min(8)
     } else {
         parallelism
     };

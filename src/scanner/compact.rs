@@ -4,8 +4,7 @@ use crate::content::inspect_files;
 use crate::error::{Error, Result};
 use crate::hash::FingerprintHasher;
 use crate::ignore::RepositoryMatcher;
-use crate::parallel::WalkControl;
-use crate::parallel::dynamic::{self, BatchControl};
+use crate::parallel::dynamic;
 use crate::report::{
     CompactContentEvidence, CompactScanReport, CompactScannedFile, ScanReport, ScannedFile,
     SkipKind, SkippedEntry,
@@ -151,13 +150,16 @@ fn discover_serial(
                     &entry,
                     options,
                     &mut evidence,
-                    &mut matcher,
+                    &matcher,
+                    None,
                     |_path, relative, bytes, version| {
                         files.push(compact_file(relative, bytes, version, options));
                     },
                 )?;
                 if skip {
                     walker.skip_current_dir();
+                } else if entry.is_dir() {
+                    matcher.prepare_directory(entry.path())?;
                 }
             }
             Err(error) if options.walk.error_policy == ErrorPolicy::Abort => {
@@ -212,62 +214,27 @@ fn discover_parallel(
             let mut state = visitor_state
                 .lock()
                 .expect("compact scanner state is not poisoned");
-            let mut controls = Vec::with_capacity(entries.len());
-            let mut quit = state.error.is_some();
-            for entry in entries {
-                if quit {
-                    controls.push(WalkControl::Quit);
-                    continue;
-                }
-                if let Some(reason) = state.runtime.before_next(&visitor_options) {
-                    state.evidence.terminate(reason);
-                    controls.push(WalkControl::Quit);
-                    quit = true;
-                    continue;
-                }
-                state.runtime.record_entry();
-                let ParallelCompactDiscovery {
-                    evidence,
-                    files,
-                    matcher,
-                    ..
-                } = &mut *state;
-                match process_entry_with(
-                    entry,
-                    &visitor_options,
-                    evidence,
-                    matcher,
-                    |_path, relative, bytes, version| {
-                        files.push(compact_file(relative, bytes, version, &visitor_options));
-                    },
-                ) {
-                    Ok(true) => controls.push(WalkControl::Skip),
-                    Ok(false) => controls.push(WalkControl::Continue),
-                    Err(error) => {
-                        state.error = Some(error);
-                        controls.push(WalkControl::Quit);
-                        quit = true;
-                    }
-                }
-            }
-            for error in errors {
-                if quit {
-                    break;
-                }
-                if let Some(reason) = state.runtime.before_next(&visitor_options) {
-                    state.evidence.terminate(reason);
-                    quit = true;
-                    break;
-                }
-                state.runtime.record_entry();
-                if visitor_options.walk.error_policy == ErrorPolicy::Continue {
-                    record_walk_error(error, &visitor_root, &mut state.evidence);
-                }
-            }
-            BatchControl {
-                entries: controls,
-                quit,
-            }
+            let ParallelCompactDiscovery {
+                evidence,
+                files,
+                matcher,
+                runtime,
+                error: scan_error,
+            } = &mut *state;
+            super::batch::process_parallel_batch(
+                entries,
+                errors,
+                &visitor_root,
+                &visitor_options,
+                evidence,
+                matcher,
+                runtime,
+                scan_error,
+                files,
+                |_path, relative, bytes, version| {
+                    compact_file(relative, bytes, version, &visitor_options)
+                },
+            )
         },
     );
     if let Err(error) = traversal {

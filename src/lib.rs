@@ -41,6 +41,7 @@ mod selection;
 mod snapshot;
 mod stateful_walk;
 mod stdout;
+mod summary;
 mod walk_builder;
 mod walk_iter;
 mod walk_platform;
@@ -93,6 +94,7 @@ pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, S
 pub use stateful_walk::{
     ParallelStatefulWalker, StatefulWalkBuilder, StatefulWalkEntry, StatefulWalker,
 };
+pub use summary::ScanSummary;
 pub use walk_builder::{MultiWalker, WalkBuilder};
 pub use walker::{
     ErrorPolicy, RootSymlinkPolicy, WalkEntry, WalkError, WalkOperation, WalkOptions,

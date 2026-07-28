@@ -218,7 +218,7 @@ pub(super) fn changed_candidate(
         return Ok(ChangedPath::MissingOrSkipped);
     }
     let decision = matcher.matched(&path, false)?;
-    if skip_match(report, relative.to_owned(), decision) {
+    if skip_match(report, relative, decision) {
         return Ok(ChangedPath::MissingOrSkipped);
     }
     if decision != RepositoryMatch::OverrideInclude && !options.accepts_extension(&path, relative) {
@@ -260,7 +260,7 @@ fn ancestors_selected(
     for component in parent.components() {
         directory.push(component.as_os_str());
         let decision = matcher.matched(&directory, true)?;
-        if skip_match(report, relative.to_owned(), decision) {
+        if skip_match(report, relative, decision) {
             return Ok(false);
         }
         if decision != RepositoryMatch::OverrideInclude

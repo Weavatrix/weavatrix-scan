@@ -5,13 +5,18 @@ pub(super) enum RuleMatcher {
     Literal(bool),
     Prefix(String, bool),
     Suffix(String, bool),
-    Glob(Option<String>, bool),
+    Glob {
+        needle: Option<String>,
+        prefix: Option<String>,
+        suffix: Option<String>,
+        case_insensitive: bool,
+    },
 }
 
 impl RuleMatcher {
     pub(super) fn new(pattern: &str, case_insensitive: bool) -> Self {
         if pattern.contains('{') || pattern.contains("**") {
-            Self::Glob(None, case_insensitive)
+            Self::glob(pattern, case_insensitive)
         } else if !has_meta(pattern) {
             Self::Literal(case_insensitive)
         } else if let Some(suffix) = pattern.strip_prefix('*').filter(|value| !has_meta(value)) {
@@ -19,7 +24,18 @@ impl RuleMatcher {
         } else if let Some(prefix) = pattern.strip_suffix('*').filter(|value| !has_meta(value)) {
             Self::Prefix(prefix.to_owned(), case_insensitive)
         } else {
-            Self::Glob(longest_literal(pattern), case_insensitive)
+            Self::glob(pattern, case_insensitive)
+        }
+    }
+
+    fn glob(pattern: &str, case_insensitive: bool) -> Self {
+        Self::Glob {
+            needle: (!pattern.contains('{') && !pattern.contains("**"))
+                .then(|| longest_literal(pattern))
+                .flatten(),
+            prefix: edge_literal(pattern, true),
+            suffix: edge_literal(pattern, false),
+            case_insensitive,
         }
     }
 
@@ -27,9 +43,15 @@ impl RuleMatcher {
         matches!(self, Self::Literal(false))
     }
 
-    pub(super) fn prefix_key(&self) -> Option<u8> {
+    pub(super) fn prefix_key(&self, pattern: &str) -> Option<u8> {
         match self {
             Self::Prefix(prefix, false) => prefix.bytes().next(),
+            Self::Glob {
+                prefix,
+                case_insensitive: false,
+                ..
+            } => prefix.as_ref().and_then(|prefix| prefix.bytes().next()),
+            Self::Literal(false) => pattern.bytes().next(),
             _ => None,
         }
     }
@@ -48,8 +70,17 @@ impl RuleMatcher {
             Self::Literal(true) => pattern.eq_ignore_ascii_case(value),
             Self::Prefix(prefix, false) => value.starts_with(prefix),
             Self::Suffix(suffix, false) => value.ends_with(suffix),
-            Self::Glob(needle, false) => {
-                needle.as_ref().is_none_or(|needle| value.contains(needle))
+            Self::Glob {
+                needle,
+                prefix,
+                suffix,
+                case_insensitive: false,
+            } => {
+                prefix
+                    .as_ref()
+                    .is_none_or(|prefix| value.starts_with(prefix))
+                    && suffix.as_ref().is_none_or(|suffix| value.ends_with(suffix))
+                    && needle.as_ref().is_none_or(|needle| value.contains(needle))
                     && glob::matches(pattern, value)
             }
             Self::Prefix(prefix, true) => value
@@ -58,9 +89,18 @@ impl RuleMatcher {
             Self::Suffix(suffix, true) => value
                 .get(value.len().saturating_sub(suffix.len())..)
                 .is_some_and(|value| value.eq_ignore_ascii_case(suffix)),
-            Self::Glob(needle, true) => {
+            Self::Glob {
+                needle,
+                prefix,
+                suffix,
+                case_insensitive: true,
+            } => {
                 let value = value.to_ascii_lowercase();
-                needle.as_ref().is_none_or(|needle| value.contains(needle))
+                prefix
+                    .as_ref()
+                    .is_none_or(|prefix| value.starts_with(prefix))
+                    && suffix.as_ref().is_none_or(|suffix| value.ends_with(suffix))
+                    && needle.as_ref().is_none_or(|needle| value.contains(needle))
                     && glob::matches(pattern, &value)
             }
         }
@@ -101,6 +141,50 @@ fn longest_literal(pattern: &str) -> Option<String> {
     retain_longest(&mut current, &mut longest);
     (longest.len() >= 2)
         .then(|| String::from_utf8(longest).ok())
+        .flatten()
+}
+
+fn edge_literal(pattern: &str, prefix: bool) -> Option<String> {
+    let mut edge = Vec::new();
+    let mut current = Vec::new();
+    let mut bytes = pattern.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'\\' => {
+                if let Some(escaped) = bytes.next() {
+                    current.push(escaped);
+                }
+            }
+            b'[' => {
+                if prefix {
+                    break;
+                }
+                current.clear();
+                for member in bytes.by_ref() {
+                    if member == b']' {
+                        break;
+                    }
+                }
+            }
+            b'*' | b'?' | b'{' | b'}' | b',' => {
+                if prefix {
+                    break;
+                }
+                current.clear();
+            }
+            literal => current.push(literal),
+        }
+    }
+    if prefix {
+        edge = current;
+    } else {
+        std::mem::swap(&mut edge, &mut current);
+        if pattern.contains("**/") && edge.first() == Some(&b'/') {
+            edge.remove(0);
+        }
+    }
+    (!edge.is_empty())
+        .then(|| String::from_utf8(edge).ok())
         .flatten()
 }
 

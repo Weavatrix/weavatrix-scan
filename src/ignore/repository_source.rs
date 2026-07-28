@@ -6,6 +6,7 @@ use super::{
 use crate::error::{Error, Result};
 use crate::path::normalized_relative_path;
 use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind, ScanWarning};
+use crate::walker::WalkEntry;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -13,6 +14,33 @@ use std::sync::Arc;
 
 impl RepositoryMatcher {
     pub(super) fn prepare_directory_inner(&mut self, absolute: &Path) -> Result<()> {
+        let ignore_files = self.ignore_files.clone();
+        self.prepare_directory_inner_with_files(absolute, &ignore_files)
+    }
+
+    pub(crate) fn prepare_directory_from_entries(
+        &mut self,
+        absolute: &Path,
+        entries: &[WalkEntry],
+    ) -> Result<()> {
+        let ignore_files = self
+            .ignore_files
+            .iter()
+            .filter(|name| {
+                entries
+                    .iter()
+                    .any(|entry| entry.file_name() == name.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.prepare_directory_inner_with_files(absolute, &ignore_files)
+    }
+
+    fn prepare_directory_inner_with_files(
+        &mut self,
+        absolute: &Path,
+        ignore_files: &[String],
+    ) -> Result<()> {
         if self.directories.contains_key(absolute) {
             return Ok(());
         }
@@ -39,7 +67,7 @@ impl RepositoryMatcher {
         let (rules, errors, evidence) = build_child_rules(
             absolute,
             &base,
-            &self.ignore_files,
+            ignore_files,
             self.case_insensitive,
             &inherited,
             &self.match_root,

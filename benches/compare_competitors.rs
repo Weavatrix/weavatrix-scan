@@ -1,43 +1,51 @@
 mod support;
 
 use ignore::WalkBuilder;
-use jwalk::WalkDir as JWalkDir;
 use std::path::{Path, PathBuf};
 use support::{
-    BenchmarkCase, EXTENSIONS, Fixture, IGNORE_AWARE_FILES, RAW_FILES, SOURCE_FILES, measure,
-    measure_group, print_measurement,
+    BenchmarkCase, EXTENSIONS, Fixture, IGNORE_AWARE_FILES, Paths, RAW_FILES, SOURCE_FILES,
+    benchmark_runs, benchmark_warmups, dirwalk_paths, ignore_paths, jwalk_paths, measure,
+    measure_group, parallel_paths, print_measurement, std_read_dir_paths, walkdir_paths,
+    walker_paths,
 };
-use walkdir::WalkDir;
-use weavatrix_scan::{
-    ParallelWalker, ScanOptions, Scanner, StandardSkips, WalkEntry, WalkOptions, Walker,
-};
+use weavatrix_scan::{ScanOptions, Scanner, StandardSkips};
 
 fn main() {
     let fixture = Fixture::new();
 
-    println!("corpus=synthetic source_files={SOURCE_FILES} statistic=median runs=11 warmups=2");
+    println!(
+        "corpus=synthetic source_files={SOURCE_FILES} statistic=median runs={} warmups={}",
+        benchmark_runs(),
+        benchmark_warmups()
+    );
     benchmark_raw_discovery(&fixture);
     benchmark_ignore_aware_discovery(&fixture);
     benchmark_rich_manifest(&fixture);
 }
 
 fn benchmark_raw_discovery(fixture: &Fixture) {
-    let expected = walker_paths(&fixture.root);
+    let expected = walker_paths(&fixture.root, EXTENSIONS);
     let mut cases = vec![
         BenchmarkCase::new("weavatrix-walker", || {
-            checked_path_len(&walker_paths(&fixture.root), &expected)
+            checked_path_len(&walker_paths(&fixture.root, EXTENSIONS), &expected)
         }),
         BenchmarkCase::new("weavatrix-parallel", || {
-            checked_path_len(&parallel_paths(&fixture.root), &expected)
+            checked_path_len(&parallel_paths(&fixture.root, EXTENSIONS), &expected)
         }),
         BenchmarkCase::new("ignore", || {
-            checked_path_len(&ignore_paths(&fixture.root), &expected)
+            checked_path_len(&ignore_paths(&fixture.root, EXTENSIONS), &expected)
         }),
         BenchmarkCase::new("walkdir", || {
-            checked_path_len(&walkdir_paths(&fixture.root), &expected)
+            checked_path_len(&walkdir_paths(&fixture.root, EXTENSIONS), &expected)
         }),
         BenchmarkCase::new("jwalk", || {
-            checked_path_len(&jwalk_paths(&fixture.root), &expected)
+            checked_path_len(&jwalk_paths(&fixture.root, EXTENSIONS), &expected)
+        }),
+        BenchmarkCase::new("dirwalk", || {
+            checked_path_len(&dirwalk_paths(&fixture.root, EXTENSIONS), &expected)
+        }),
+        BenchmarkCase::new("std-read-dir", || {
+            checked_path_len(&std_read_dir_paths(&fixture.root, EXTENSIONS), &expected)
         }),
     ];
     let results = measure_group(&mut cases);
@@ -81,7 +89,6 @@ fn benchmark_rich_manifest(fixture: &Fixture) {
 }
 
 type Manifest = Vec<(String, u64)>;
-type Paths = Vec<PathBuf>;
 
 fn checked_len(actual: &Manifest, expected: &Manifest) -> usize {
     assert_eq!(actual, expected);
@@ -111,81 +118,6 @@ fn weavatrix_manifest(root: &Path, respect_ignore_files: bool, parallelism: usiz
 fn checked_path_len(actual: &Paths, expected: &Paths) -> usize {
     assert_eq!(actual, expected);
     actual.len()
-}
-
-fn walker_paths(root: &Path) -> Paths {
-    relative_paths(
-        root,
-        Walker::with_options(root, WalkOptions::default())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(WalkEntry::is_file)
-            .filter(|entry| has_extension(entry.path()))
-            .map(WalkEntry::into_path),
-    )
-}
-
-fn parallel_paths(root: &Path) -> Paths {
-    relative_paths(
-        root,
-        ParallelWalker::new(root)
-            .walk()
-            .unwrap()
-            .entries
-            .into_iter()
-            .filter(WalkEntry::is_file)
-            .filter(|entry| has_extension(entry.path()))
-            .map(WalkEntry::into_path),
-    )
-}
-
-fn ignore_paths(root: &Path) -> Paths {
-    let mut builder = WalkBuilder::new(root);
-    builder.standard_filters(false);
-    relative_paths(
-        root,
-        builder
-            .build()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
-            .filter(|entry| has_extension(entry.path()))
-            .map(ignore::DirEntry::into_path),
-    )
-}
-
-fn walkdir_paths(root: &Path) -> Paths {
-    relative_paths(
-        root,
-        WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .filter(|entry| has_extension(entry.path()))
-            .map(walkdir::DirEntry::into_path),
-    )
-}
-
-fn jwalk_paths(root: &Path) -> Paths {
-    relative_paths(
-        root,
-        JWalkDir::new(root)
-            .sort(false)
-            .skip_hidden(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .filter(|entry| has_extension(&entry.path()))
-            .map(|entry| entry.path()),
-    )
-}
-
-fn relative_paths(root: &Path, paths: impl Iterator<Item = PathBuf>) -> Paths {
-    let mut paths = paths
-        .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
-        .collect::<Vec<_>>();
-    paths.sort_unstable();
-    paths
 }
 
 fn ignore_manifest(root: &Path, respect_ignore_files: bool) -> Manifest {

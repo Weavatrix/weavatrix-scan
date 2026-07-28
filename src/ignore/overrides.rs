@@ -52,6 +52,9 @@ impl OverrideRules {
     }
 
     pub(super) fn matched(&self, path: &str, is_directory: bool) -> RepositoryMatch {
+        if self.rules.rules.is_empty() {
+            return RepositoryMatch::None;
+        }
         let matched = self
             .rules
             .matches_exact(path, is_directory)

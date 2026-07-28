@@ -458,7 +458,8 @@ fn stream_discover_serial(
                     &entry,
                     options,
                     &mut prepared.evidence,
-                    &mut prepared.matcher,
+                    &prepared.matcher,
+                    None,
                     |_path, relative, bytes, version| {
                         selected = Some(content_candidate(relative, bytes, version));
                     },
@@ -471,6 +472,8 @@ fn stream_discover_serial(
                 }
                 if skip {
                     walker.skip_current_dir();
+                } else if entry.is_dir() {
+                    prepared.matcher.prepare_directory(entry.path())?;
                 }
             }
             Err(error) if options.walk.error_policy == ErrorPolicy::Abort => {

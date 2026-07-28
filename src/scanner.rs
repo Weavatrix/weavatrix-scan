@@ -3,9 +3,8 @@ use crate::config::{EvidenceMode, ScanOptions};
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
 use crate::ignore::RepositoryMatcher;
-use crate::parallel::WalkControl;
-use crate::parallel::dynamic::{self, BatchControl};
-use crate::report::ScanReport;
+use crate::parallel::dynamic;
+use crate::report::{ScanReport, ScannedFile};
 use crate::runtime::ParallelRuntime;
 use crate::scan_finalize::finalize_report;
 use crate::scan_limits::{ScanRuntime, apply_total_bytes_limit};
@@ -13,6 +12,7 @@ use crate::walker::{ErrorPolicy, Walker};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+mod batch;
 mod compact;
 mod content_visit;
 mod entry;
@@ -240,8 +240,11 @@ fn discover_serial(
         runtime.record_entry();
         match item {
             Ok(entry) => {
-                if process_entry(&entry, options, &mut report, &mut matcher)? {
+                let skip = process_entry(&entry, options, &mut report, &matcher, None)?;
+                if skip {
                     walker.skip_current_dir();
+                } else if entry.is_dir() {
+                    matcher.prepare_directory(entry.path())?;
                 }
             }
             Err(error) if options.walk.error_policy == ErrorPolicy::Abort => {
@@ -288,51 +291,35 @@ fn discover_parallel(
             let mut state = visitor_state
                 .lock()
                 .expect("parallel scanner state is not poisoned");
-            let mut controls = Vec::with_capacity(entries.len());
-            let mut quit = state.error.is_some();
-            for entry in entries {
-                if quit {
-                    controls.push(WalkControl::Quit);
-                    continue;
-                }
-                if let Some(reason) = state.runtime.before_next(&visitor_options) {
-                    state.report.terminate(reason);
-                    controls.push(WalkControl::Quit);
-                    quit = true;
-                    continue;
-                }
-                state.runtime.record_entry();
-                let ParallelDiscovery {
-                    report, matcher, ..
-                } = &mut *state;
-                match process_entry(entry, &visitor_options, report, matcher) {
-                    Ok(true) => controls.push(WalkControl::Skip),
-                    Ok(false) => controls.push(WalkControl::Continue),
-                    Err(error) => {
-                        state.error = Some(error);
-                        controls.push(WalkControl::Quit);
-                        quit = true;
-                    }
-                }
-            }
-            for error in errors {
-                if quit {
-                    break;
-                }
-                if let Some(reason) = state.runtime.before_next(&visitor_options) {
-                    state.report.terminate(reason);
-                    quit = true;
-                    break;
-                }
-                state.runtime.record_entry();
-                if visitor_options.walk.error_policy == ErrorPolicy::Continue {
-                    record_walk_error(error, &visitor_root, &mut state.report);
-                }
-            }
-            BatchControl {
-                entries: controls,
-                quit,
-            }
+            let ParallelDiscovery {
+                report,
+                matcher,
+                runtime,
+                error: scan_error,
+            } = &mut *state;
+            let mut files = std::mem::take(&mut report.files);
+            let control = batch::process_parallel_batch(
+                entries,
+                errors,
+                &visitor_root,
+                &visitor_options,
+                report,
+                matcher,
+                runtime,
+                scan_error,
+                &mut files,
+                |path, relative, bytes, version| ScannedFile {
+                    absolute: path.to_path_buf(),
+                    relative,
+                    bytes,
+                    content_hash: None,
+                    content_fingerprint: None,
+                    version,
+                    binary_checked: false,
+                },
+            );
+            report.files = files;
+            control
         },
     );
     if let Err(error) = traversal {

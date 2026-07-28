@@ -106,10 +106,12 @@ impl ParallelWalker {
         if self.options.error_policy == ErrorPolicy::Abort && !shallow.errors.is_empty() {
             return Err(shallow.errors.into_iter().next().expect("error exists"));
         }
-        if !self.options.same_file_system && shallow.tasks.len() < 2 {
+        if !self.options.same_file_system {
             let target = requested_workers(&self.runtime, self.parallelism, self.options.max_open)
-                .min(FRONTIER_TARGET_TASKS);
-            shallow = expand_frontier(shallow, self.options, target);
+                .saturating_mul(FRONTIER_TASKS_PER_WORKER);
+            if shallow.tasks.len() < target {
+                shallow = expand_frontier(shallow, self.options, target);
+            }
         }
         if shallow.tasks.is_empty() {
             return Ok(without_stdout(
@@ -246,10 +248,10 @@ fn schedule_error(root: &std::path::Path, source: std::io::Error) -> WalkError {
 }
 
 const fn default_traversal_workers() -> usize {
-    if cfg!(windows) { 16 } else { 8 }
+    8
 }
 
-const FRONTIER_TARGET_TASKS: usize = 4;
+const FRONTIER_TASKS_PER_WORKER: usize = 2;
 
 fn copy_walk_error(error: &WalkError) -> WalkError {
     WalkError::new(

@@ -257,6 +257,16 @@ impl ScanReport {
         }
     }
 
+    pub(crate) fn skip_borrowed(&mut self, relative: &str, kind: SkipKind, detail: Option<String>) {
+        if self.record_skipped {
+            self.skipped.push(SkippedEntry {
+                relative: relative.to_owned(),
+                kind,
+                detail,
+            });
+        }
+    }
+
     pub(crate) fn warn(&mut self, relative: Option<String>, message: impl Into<String>) {
         self.complete = false;
         self.warnings.push(ScanWarning {

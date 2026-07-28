@@ -1,7 +1,6 @@
 use crate::hash::FingerprintHasher;
 use crate::path::normalized_relative_path;
 use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind};
-use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -66,9 +65,9 @@ struct IgnoreLayer {
 #[derive(Debug, Clone, Default)]
 struct RuleSet {
     rules: Vec<IgnoreRule>,
-    exact_anywhere: HashMap<String, Vec<usize>>,
-    prefixes: HashMap<u8, Vec<usize>>,
-    suffixes: HashMap<u8, Vec<usize>>,
+    exact_anywhere: Option<Box<[Vec<usize>; 256]>>,
+    prefixes: Option<Box<[Vec<usize>; 256]>>,
+    suffixes: Option<Box<[Vec<usize>; 256]>>,
     generic: Vec<usize>,
 }
 
@@ -217,6 +216,21 @@ fn match_rules(path: &str, is_directory: bool, rules: &IgnoreRules) -> Option<Ru
         }
     }
     ancestor_included.then_some(RuleAction::Include)
+}
+
+fn match_prepared_rules(path: &str, is_directory: bool, rules: &IgnoreRules) -> Option<RuleAction> {
+    for source in rules.layers.iter().rev() {
+        let mut layer = source.as_deref();
+        while let Some(current) = layer {
+            if let Some(candidate) = candidate_for_base(path, &current.base)
+                && let Some(action) = current.rules.matches_exact(candidate, is_directory)
+            {
+                return Some(action);
+            }
+            layer = current.parent.as_deref();
+        }
+    }
+    None
 }
 
 fn candidate_for_base<'a>(path: &'a str, base: &str) -> Option<&'a str> {

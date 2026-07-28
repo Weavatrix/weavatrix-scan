@@ -1,7 +1,7 @@
 use crate::config::ScanOptions;
 use crate::error::{Error, Result};
 use crate::file_version::from_metadata;
-use crate::ignore::{RepositoryMatch, RepositoryMatcher};
+use crate::ignore::{IgnoreRules, RepositoryMatch, RepositoryMatcher};
 use crate::path::normalized_relative_path;
 use crate::report::{FileVersion, ScanReport, ScannedFile, SkipKind};
 use crate::scan_match::skip_match;
@@ -9,11 +9,27 @@ use crate::walker::{WalkEntry, WalkError, WalkOperation, WalkSkipReason};
 use std::fs;
 use std::path::Path;
 
+pub(super) fn prepare_batch_directory<'a>(
+    matcher: &mut RepositoryMatcher,
+    entries: &'a [WalkEntry],
+) -> Result<Option<&'a Path>> {
+    let Some(parent) = entries
+        .first()
+        .filter(|entry| entry.depth() > 0)
+        .and_then(|entry| entry.path().parent())
+    else {
+        return Ok(None);
+    };
+    matcher.prepare_directory_from_entries(parent, entries)?;
+    Ok(Some(parent))
+}
+
 pub(super) fn process_entry(
     entry: &WalkEntry,
     options: &ScanOptions,
     report: &mut ScanReport,
-    matcher: &mut RepositoryMatcher,
+    matcher: &RepositoryMatcher,
+    prepared_rules: Option<&IgnoreRules>,
 ) -> Result<bool> {
     let mut selected = None;
     let skip = process_entry_with(
@@ -21,6 +37,7 @@ pub(super) fn process_entry(
         options,
         report,
         matcher,
+        prepared_rules,
         |path, relative, bytes, version| {
             selected = Some(ScannedFile {
                 absolute: path.to_path_buf(),
@@ -43,7 +60,8 @@ pub(super) fn process_entry_with<F>(
     entry: &WalkEntry,
     options: &ScanOptions,
     report: &mut ScanReport,
-    matcher: &mut RepositoryMatcher,
+    matcher: &RepositoryMatcher,
+    prepared_rules: Option<&IgnoreRules>,
     mut selected: F,
 ) -> Result<bool>
 where
@@ -56,7 +74,6 @@ where
             report.skip(".".to_owned(), skip_kind(reason), None);
             return Ok(true);
         }
-        matcher.prepare_directory(entry.path())?;
         return Ok(false);
     }
     if entry.depth() < options.effective_min_depth() && !entry.is_dir() {
@@ -73,9 +90,29 @@ where
 
     if entry.is_dir() {
         let parent = entry.path().parent().unwrap_or(entry.path());
-        let decision =
-            matcher.matched_prepared(&relative, parent, entry.path(), true, entry.hidden());
-        if skip_match(report, relative.clone(), decision) {
+        let decision = prepared_rules.map_or_else(
+            || {
+                matcher.matched_prepared(
+                    &relative,
+                    parent,
+                    entry.path(),
+                    true,
+                    entry.hidden(),
+                    true,
+                )
+            },
+            |rules| {
+                matcher.matched_with_rules(
+                    &relative,
+                    entry.path(),
+                    true,
+                    entry.hidden(),
+                    rules,
+                    true,
+                )
+            },
+        );
+        if skip_match(report, &relative, decision) {
             return Ok(true);
         }
         if decision != RepositoryMatch::OverrideInclude
@@ -84,15 +121,19 @@ where
             report.skip(relative, SkipKind::StandardDirectory, None);
             return Ok(true);
         }
-        matcher.prepare_directory(entry.path())?;
         return Ok(false);
     }
     if !entry.is_file() {
         return Ok(false);
     }
     let parent = entry.path().parent().unwrap_or(entry.path());
-    let decision = matcher.matched_prepared(&relative, parent, entry.path(), false, entry.hidden());
-    if skip_match(report, relative.clone(), decision) {
+    let decision = prepared_rules.map_or_else(
+        || matcher.matched_prepared(&relative, parent, entry.path(), false, entry.hidden(), true),
+        |rules| {
+            matcher.matched_with_rules(&relative, entry.path(), false, entry.hidden(), rules, true)
+        },
+    );
+    if skip_match(report, &relative, decision) {
         return Ok(false);
     }
     process_file(

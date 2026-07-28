@@ -4,6 +4,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod paths;
+
+#[allow(unused_imports)]
+pub use paths::{
+    Paths, dirwalk_paths, ignore_paths, jwalk_paths, parallel_paths, std_read_dir_paths,
+    walkdir_paths, walker_paths,
+};
+
 pub const DIRECTORIES: usize = 80;
 pub const FILES_PER_LANGUAGE: usize = 25;
 pub const EXTENSIONS: &[&str] = &["rs", "go", "ts"];
@@ -31,16 +39,32 @@ impl<'a> BenchmarkCase<'a> {
     }
 }
 
-pub fn measure(mut operation: impl FnMut() -> usize) -> Measurement {
-    const WARMUPS: usize = 2;
-    const RUNS: usize = 11;
+pub fn benchmark_runs() -> usize {
+    benchmark_count("WEAVATRIX_BENCH_RUNS", 11)
+}
 
-    for _ in 0..WARMUPS {
+pub fn benchmark_warmups() -> usize {
+    benchmark_count("WEAVATRIX_BENCH_WARMUPS", 2)
+}
+
+fn benchmark_count(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+pub fn measure(mut operation: impl FnMut() -> usize) -> Measurement {
+    let warmups = benchmark_warmups();
+    let runs = benchmark_runs();
+
+    for _ in 0..warmups {
         std::hint::black_box(operation());
     }
-    let mut samples = Vec::with_capacity(RUNS);
+    let mut samples = Vec::with_capacity(runs);
     let expected = operation();
-    for _ in 0..RUNS {
+    for _ in 0..runs {
         let start = Instant::now();
         let count = std::hint::black_box(operation());
         assert_eq!(count, expected);
@@ -49,25 +73,25 @@ pub fn measure(mut operation: impl FnMut() -> usize) -> Measurement {
     samples.sort_unstable();
     Measurement {
         count: expected,
-        median: samples[RUNS / 2],
+        median: samples[runs / 2],
         minimum: samples[0],
     }
 }
 
 pub fn measure_group(cases: &mut [BenchmarkCase<'_>]) -> Vec<Measurement> {
-    const WARMUPS: usize = 2;
-    const RUNS: usize = 11;
+    let warmups = benchmark_warmups();
+    let runs = benchmark_runs();
 
     let mut counts = vec![None; cases.len()];
-    for _ in 0..WARMUPS {
+    for _ in 0..warmups {
         for (index, case) in cases.iter_mut().enumerate() {
             let count = std::hint::black_box((case.operation)());
             assert!(counts[index].is_none_or(|expected| expected == count));
             counts[index] = Some(count);
         }
     }
-    let mut samples = vec![Vec::with_capacity(RUNS); cases.len()];
-    for round in 0..RUNS {
+    let mut samples = vec![Vec::with_capacity(runs); cases.len()];
+    for round in 0..runs {
         for offset in 0..cases.len() {
             let index = (round + offset) % cases.len();
             let start = Instant::now();
@@ -83,7 +107,7 @@ pub fn measure_group(cases: &mut [BenchmarkCase<'_>]) -> Vec<Measurement> {
             samples.sort_unstable();
             Measurement {
                 count: count.unwrap(),
-                median: samples[RUNS / 2],
+                median: samples[runs / 2],
                 minimum: samples[0],
             }
         })

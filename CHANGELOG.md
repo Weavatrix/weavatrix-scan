@@ -4,6 +4,42 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.4.3 - 2026-07-28
+
+- Add path-free `ScanSummary` aggregation for full and compact reports, with
+  deterministic skip-kind counts, completion, portability, and cache metrics.
+- Speed up ignore-aware scanning by matching only the current entry after
+  ancestor directories are prepared, discovering directory ignore files from
+  traversal batches instead of probing every configured filename, avoiding
+  successful-path skip allocations, lazily bucketing literal-leading glob
+  rules, borrowing prepared rules once per directory batch, and rejecting
+  complex globs through mandatory literal prefix/suffix guards before running
+  the generic matcher.
+- Expand the optional real-repository benchmark into raw, ignore-aware, and
+  no-ignore modes with configurable warmup/sample counts, exact output checks,
+  pinned MIT Rust and Gitea corpora, and `dirwalk` as an exact-parity raw
+  competitor.
+- Balance skewed collected-walker frontiers to two directory tasks per worker
+  and use eight default traversal workers, reducing the pinned Rust raw row
+  from 421.1 ms to 285.9 ms while improving the compact/full parallel scanners
+  to 4.77x/3.81x over `ignore`.
+- Share full and compact parallel batch processing without changing either
+  public report contract or adding an intermediate batch allocation.
+- Add a dependency-free `std::fs::read_dir` diagnostic baseline and document
+  why `dirwalk`'s Windows lead comes from its narrower result/scheduling model,
+  not an unavailable filesystem call; also cover its real
+  `getdents64`/`statx` Linux backend without claiming an unmeasured ranking.
+- Keep TypeScript tooling out of the crate and retain `serde_json` and
+  `dirwalk` strictly as development-only contract/benchmark dependencies.
+
+## 0.4.2 - 2026-07-26
+
+- Add an explicit buffered-parallel content discovery mode for latency-sensitive
+  consumers while preserving the constant-memory streaming default and its
+  ignore, validation, binary, error, and cancellation contracts.
+- Make discovery parity coverage independent of the test runner's working
+  directory.
+
 ## 0.4.1 - 2026-07-26
 
 - Reuse already-collected Windows file metadata when applying hidden-file

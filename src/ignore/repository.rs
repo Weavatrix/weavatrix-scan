@@ -2,7 +2,8 @@ use super::git::{gitconfig_excludes_path, resolve_git_directory};
 use super::overrides::OverrideRules;
 use super::repository_source::find_repository_root;
 use super::{
-    IgnoreRules, RepositoryMatch, RuleAction, SourceRank, match_rules, normalized_evidence_location,
+    IgnoreRules, RepositoryMatch, RuleAction, SourceRank, match_prepared_rules, match_rules,
+    normalized_evidence_location,
 };
 use crate::config::{IgnorePolicy, ScanOptions};
 use crate::error::{Error, Result};
@@ -200,6 +201,7 @@ impl RepositoryMatcher {
             &absolute,
             is_directory,
             None,
+            false,
         ))
     }
 
@@ -290,6 +292,31 @@ impl RepositoryMatcher {
         absolute: &Path,
         is_directory: bool,
         hidden: Option<bool>,
+        ancestors_prepared: bool,
+    ) -> RepositoryMatch {
+        let rules = self.directories.get(parent).unwrap_or(&self.base_rules);
+        self.matched_with_rules(
+            scan_relative,
+            absolute,
+            is_directory,
+            hidden,
+            rules,
+            ancestors_prepared,
+        )
+    }
+
+    pub(crate) fn prepared_rules(&self, parent: &Path) -> &IgnoreRules {
+        self.directories.get(parent).unwrap_or(&self.base_rules)
+    }
+
+    pub(crate) fn matched_with_rules(
+        &self,
+        scan_relative: &str,
+        absolute: &Path,
+        is_directory: bool,
+        hidden: Option<bool>,
+        rules: &IgnoreRules,
+        ancestors_prepared: bool,
     ) -> RepositoryMatch {
         let override_match = self.overrides.matched(scan_relative, is_directory);
         if override_match != RepositoryMatch::None {
@@ -300,8 +327,12 @@ impl RepositoryMatcher {
         } else {
             Cow::Owned(format!("{}/{scan_relative}", self.scan_base))
         };
-        let rules = self.directories.get(parent).unwrap_or(&self.base_rules);
-        match match_rules(&candidate, is_directory, rules) {
+        let matched = if ancestors_prepared {
+            match_prepared_rules(&candidate, is_directory, rules)
+        } else {
+            match_rules(&candidate, is_directory, rules)
+        };
+        match matched {
             Some(RuleAction::Ignore) => RepositoryMatch::Ignore,
             Some(RuleAction::Include) => RepositoryMatch::Include,
             None if self.skip_hidden && is_hidden_with_hint(absolute, hidden) => {

@@ -43,18 +43,27 @@ layers:
 - `ParallelRuntime`: process-global, dedicated, or application-owned execution
   shared by walker and scanner APIs.
 
+Within the wider Weavatrix stack, this crate owns repository discovery and
+selection, [`weavatrix-parse`](https://github.com/sergii-ziborov/weavatrix-parse)
+owns dependency-free source tokenization and structural facts, and
+[`weavatrix-rust`](https://github.com/sergii-ziborov/weavatrix-rust) composes
+the scan and analysis layers. Go and Node walkers below are performance and
+capability controls, not proposed alternate implementations of that product
+pipeline.
+
 ### Competitive position
 
 Against the versions tested in this repository (`ignore` 0.4.31, `walkdir`
-2.5.0, and `jwalk` 0.8.1), Weavatrix Scan is the strongest overall fit when the
-output must be a deterministic, explainable code-scanner manifest rather than
-only a stream of directory entries. It is not the universal winner for every
-walker workload:
+2.5.0, `jwalk` 0.8.1, and `dirwalk` 1.1.1), Weavatrix Scan is the strongest
+overall fit when the output must be a deterministic, explainable code-scanner
+manifest rather than only a stream of directory entries. It is not the
+universal winner for every walker workload:
 
 | Workload | Strongest fit in this comparison | Why |
 | --- | --- | --- |
 | Deterministic code-scanner manifest | **Weavatrix Scan** | Only entry with normalized paths, hashes, aggregate revision, typed skips, portable evidence, incremental cache, and changed-path updates |
 | Raw parallel streaming | **Weavatrix `ParallelWalker`** | 264.7 ms and 7.6 MiB peak on the measured 1,000,000-file Windows fixture |
+| Fixed real-corpus raw traversal | **dirwalk / jwalk** | On the pinned Rust checkout with a warm Windows cache, `dirwalk` measured 123.3 ms and `jwalk` 161.2 ms; Weavatrix collected `ParallelWalker` measured 285.9 ms |
 | Minimal serial traversal | **walkdir / Weavatrix `Walker`** | walkdir remains the small established primitive; Walker measured 546.3 ms versus 584.5 ms with comparable 5 MiB-class memory |
 | Memory-efficient deterministic manifest | **Weavatrix `CompactScanReport`** | Exact output parity at 1,019.4 ms / 63.2 MiB; `ignore` used 56.4 MiB but took 2,106.7 ms and does not produce revision/evidence |
 | Reusable selection matcher | **Weavatrix / ignore** | Weavatrix combines ignore, overrides, types, depth, size, symlink and filesystem policy with typed outcomes; `ignore` exposes modular matcher builders |
@@ -126,6 +135,17 @@ boundaries:
 2. **Cross-platform million-file evidence.** CI and normal benchmarks cover
    Linux, Windows, and macOS, while the opt-in million-file RSS result below
    has so far been measured only on Windows.
+3. **Raw traversal ceiling.**
+   [`dirwalk`](https://docs.rs/dirwalk/latest/dirwalk/) and `jwalk` lead the
+   fixed real-corpus raw measurement below. Go
+   [`fastwalk`](https://pkg.go.dev/github.com/charlievieth/fastwalk) remains an
+   additional native competitor. Go
+   [`gocodewalker`](https://pkg.go.dev/github.com/boyter/gocodewalker) is a
+   closer ignore-aware comparison, while
+   [`parawalk`](https://docs.rs/parawalk/latest/parawalk/) and Node
+   [`fdir`](https://www.npmjs.com/package/fdir) are raw traversal controls.
+   None produces Weavatrix's revision, portable report, typed skip evidence,
+   snapshot validation, or incremental cache.
 
 The million-file result establishes top-tier performance on the measured
 Windows fixture, not a universal cross-platform ranking. The regular benchmark
@@ -178,6 +198,7 @@ let options = ScanOptions::default()
 
 let report = Scanner::new(".").options(options).scan()?;
 
+println!("{}", report.summary());
 println!("revision: {}", report.revision);
 for file in &report.files {
     println!(
@@ -563,6 +584,13 @@ plans.
 - `cache`: content reads, strict-validation fingerprint reads, and strong hashes
   reused by an incremental scan.
 
+`report.summary()` returns a deterministic, path-free `ScanSummary` for logs,
+telemetry, and higher-level tools such as `weavatrix-rust`. It aggregates file
+and byte counts, hash/binary work, retained skips by typed kind, warnings,
+ignore-source count, completion/termination, portability, and cache work.
+Skip totals intentionally describe retained evidence and are zero after
+`selected_files_only()`.
+
 Each `ScannedFile` contains an absolute path, slash-normalized repository path,
 byte size, optional `sha256:` content hash, whole-content cache fingerprint, and
 file-version evidence used to validate persistent cache reuse. The scanner
@@ -927,6 +955,105 @@ measured samples, then reports the median. Raw walkers must produce the same
 fully sorted native relative-path set; the ignore-aware comparison additionally
 checks the same normalized path-and-size manifest.
 
+### Fixed public repository benchmark
+
+`benches/real_repository.rs` also accepts a fixed checkout through
+`WEAVATRIX_BENCH_ROOT`. The primary Windows measurement below used the public
+[Rust repository](https://github.com/rust-lang/rust/tree/e19d321c06479c6fd77533582b0d5a86651f1be3)
+at commit `e19d321c06479c6fd77533582b0d5a86651f1be3`, which provides an MIT
+license option: 61,362 tracked paths, 40,660 raw source paths, and 40,649
+paths after repository ignore rules. It is a pinned checkout, not generated
+by the benchmark.
+
+```powershell
+$env:WEAVATRIX_BENCH_ROOT = "C:\corpora\rust-e19d321c"
+$env:WEAVATRIX_BENCH_MODE = "raw"       # or manifest / no-ignore
+cargo bench --locked --bench real_repository
+```
+
+The defaults are two warmups and 11 interleaved samples. Short exploratory
+runs can override them without changing the harness:
+
+```powershell
+$env:WEAVATRIX_BENCH_WARMUPS = "1"
+$env:WEAVATRIX_BENCH_RUNS = "3"
+```
+
+Every published row below is the median of three independent process medians.
+Each process uses the defaults and asserts exact sorted output parity before
+timing. Manifest rows compare identical `(normalized path, bytes)` values.
+Measured 2026-07-28 on Windows 11, Rust 1.97.1, 14 logical processors, and a
+warm filesystem cache:
+
+| Contract | Implementation | Files | Median |
+| --- | --- | ---: | ---: |
+| Raw paths | `dirwalk` 1.1.1 | 40,660 | 123.3 ms |
+| Raw paths | `jwalk` 0.8.1 | 40,660 | 161.2 ms |
+| Raw paths | Weavatrix collected `ParallelWalker` | 40,660 | 285.9 ms |
+| Raw paths | `ignore` 0.4.31, filters off | 40,660 | 498.6 ms |
+| Raw paths | Weavatrix `Walker` | 40,660 | 504.8 ms |
+| Raw paths | dependency-free `std::fs::read_dir` baseline | 40,660 | 511.6 ms |
+| Raw paths | `walkdir` 2.5.0 | 40,660 | 532.8 ms |
+| Ignore-aware compact manifest | Weavatrix `scan_compact`, parallel | 40,649 | **208.3 ms** |
+| Ignore-aware full manifest | Weavatrix `scan`, parallel | 40,649 | **261.2 ms** |
+| Ignore-aware compact manifest | Weavatrix `scan_compact`, serial | 40,649 | 978.2 ms |
+| Ignore-aware path/size manifest | `ignore` 0.4.31 | 40,649 | 994.2 ms |
+| Ignore-aware full manifest | Weavatrix `scan`, serial | 40,649 | 1,055.2 ms |
+| No-ignore path/size manifest | Weavatrix `scan_compact` | 40,660 | **211.5 ms** |
+| No-ignore path/size manifest | `walkdir` | 40,660 | 675.1 ms |
+
+The compact and full parallel scanners were respectively 4.77x and 3.81x
+faster than the output-equivalent `ignore` manifest. Serial compact remained
+1.02x faster, while serial full was 6.1% slower. The no-ignore compact manifest
+was 3.19x faster than `walkdir`.
+
+The second fixed corpus is
+[Gitea](https://github.com/go-gitea/gitea/tree/0ab3d569b4944d2b4603bb0228d6cfa4ae6ea15e),
+an MIT Go/TypeScript/Vue repository pinned at
+`0ab3d569b4944d2b4603bb0228d6cfa4ae6ea15e`. It has 6,166 tracked paths and
+3,557 selected source paths. The compact/full parallel Weavatrix manifests
+measured 37.4/39.2 ms versus 210.8 ms for `ignore`, 5.63x/5.38x advantages with
+exact path/size parity.
+
+`dirwalk` is now an explicit raw competitor and is the raw winner on the
+primary corpus. Its ignore-aware result is not reported: it differed from the
+oracle by ten Rust paths and three Gitea paths, so the harness excluded that
+non-equivalent row instead of comparing counts. `scanner-walker` is built on
+`ignore`; `parawalk` is a raw-only control; and `wax` is primarily a glob-tree
+matcher. These remain useful capability references but do not add another
+output-equivalent manifest implementation.
+
+The Windows result is not caused by a private filesystem primitive.
+`std::fs::read_dir` already uses
+[`FindFirstFileExW(FindExInfoBasic)`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfileexw)
+and `FindNextFileW`, and its `DirEntry` reuses the returned
+[`WIN32_FIND_DATAW`](https://learn.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-win32_find_dataw)
+metadata. The dependency-free standard-library baseline above isolates that
+fact. `dirwalk` instead gains from a narrower relative UTF-8-string result,
+early filtering, and recursive Rayon scheduling. Weavatrix keeps lossless
+native paths, typed local errors, bounded handles, and `unsafe_code = "forbid"`.
+Balancing skewed top-level lanes and using eight default traversal workers
+reduced the collected Weavatrix row from 421.1 ms to 285.9 ms; closing the
+remaining 2.32x raw-only gap would require a separate compact relative-path
+contract, not a hidden WinAPI switch.
+
+`dirwalk` is not Windows-only. Its Linux backend reads packed directory entries
+with a 32 KiB
+[`getdents64`](https://man7.org/linux/man-pages/man2/getdents.2.html) buffer,
+then requests size and modification time with
+[`statx`](https://man7.org/linux/man-pages/man2/statx.2.html) for every entry,
+falling back to `std::fs::read_dir` on backend failure. That per-entry metadata
+call may disadvantage a path-only workload, but no native fixed-corpus Linux
+ranking is claimed here until it is measured under the same parity harness.
+
+The earlier temporary Go harness established exact raw path parity for
+`fastwalk` and `filepath.WalkDir`; `gocodewalker` matched the selected count
+but was not a byte-manifest oracle. Go implementations remain competitor
+controls rather than another Weavatrix product layer: repository discovery
+stays in this crate, parsing in `weavatrix-parse`, and orchestration in
+`weavatrix-rust`. Absolute timings still vary with antivirus, cache state,
+filesystem, and corpus shape.
+
 Sample result on Windows 11, Rust 1.97.1, warm filesystem cache, measured
 2026-07-26 against `ignore` 0.4.31, `walkdir` 2.5.0, and `jwalk` 0.8.1:
 
@@ -1073,16 +1200,16 @@ Source review explains the remaining differences:
   path and consuming `WalkEntry::into_path` avoid universal-policy checks and
   long-path clones in raw traversal;
 - Weavatrix `ParallelWalker` expands a small shallow frontier for narrow roots,
-  then uses up to 16 Windows or 8 Unix workers without serially over-expanding
-  small trees; bounded lanes keep report order independent of worker completion;
+  then uses up to eight default workers without serially over-expanding small
+  trees; bounded lanes keep report order independent of worker completion;
 - Weavatrix `Scanner` reuses inherited rules, indexes exact literals,
   specializes prefix/suffix globs, prefilters complex patterns, and sorts only
   the final report.
 
-The optional real-repository benchmark keeps repository identities, paths, and
-individual measurements local. Published documentation contains only synthetic
-and hosted-runner corpus results. Every local comparison first asserts the exact
-same sorted `(normalized path, bytes)` manifest.
+The optional real-repository benchmark never publishes local paths. Fixed
+public-corpus rows identify only the pinned upstream checkout and aggregate
+timings; other local repositories remain private. Every comparison first
+asserts the exact same sorted `(normalized path, bytes)` manifest.
 
 The synthetic stress profile measured a skewed raw tree at 6.7 ms
 (`ParallelWalker`), 8.2 ms (`jwalk`), and 14.1 ms (`walkdir`). The expanded

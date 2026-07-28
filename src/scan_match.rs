@@ -3,13 +3,13 @@ use crate::report::{ScanReport, SkipKind};
 
 pub(crate) fn skip_match(
     report: &mut ScanReport,
-    relative: String,
+    relative: &str,
     matched: RepositoryMatch,
 ) -> bool {
     let Some(kind) = skip_kind_for_match(matched) else {
         return false;
     };
-    report.skip(relative, kind, None);
+    report.skip_borrowed(relative, kind, None);
     true
 }
 
