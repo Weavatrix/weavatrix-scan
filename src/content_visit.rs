@@ -1,5 +1,6 @@
 use crate::report::{
-    IgnoreSourceEvidence, ScanCacheStats, ScanTermination, ScanWarning, SkippedEntry,
+    CompactScanReport, CompactScannedFile, IgnoreSourceEvidence, ScanCacheStats, ScanTermination,
+    ScanWarning, SkippedEntry,
 };
 use std::path::{Path, PathBuf};
 
@@ -79,6 +80,12 @@ pub enum ContentVisitEvent<'a> {
 pub struct ContentVisitReport {
     pub mode: ContentVisitMode,
     pub root: PathBuf,
+    /// Deterministic selected-file manifest retained in revision mode.
+    ///
+    /// Every entry carries the content hash and file-version evidence produced
+    /// by the same read that emitted its bytes to the visitor. Streaming mode
+    /// leaves this empty.
+    pub files: Vec<CompactScannedFile>,
     /// Candidates selected by traversal and ignore rules before content checks.
     pub discovered: u64,
     /// Files that completed content checks and remain selected.
@@ -97,6 +104,35 @@ pub struct ContentVisitReport {
     pub termination: Option<ScanTermination>,
     pub portable: bool,
     pub cache: ScanCacheStats,
+}
+
+impl ContentVisitReport {
+    /// Converts a revision-mode visit into the compact scanner manifest used
+    /// by incremental consumers.
+    ///
+    /// Streaming visits deliberately do not retain file evidence and therefore
+    /// cannot be converted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when called for a streaming visit.
+    pub fn into_compact_scan_report(self) -> Result<CompactScanReport, &'static str> {
+        if self.mode != ContentVisitMode::Revision {
+            return Err("streaming content visits do not retain a file manifest");
+        }
+        Ok(CompactScanReport {
+            root: self.root,
+            files: self.files,
+            skipped: self.skipped,
+            warnings: self.warnings,
+            ignore_sources: self.ignore_sources,
+            revision: self.revision,
+            complete: self.complete,
+            termination: self.termination,
+            portable: self.portable,
+            cache: self.cache,
+        })
+    }
 }
 
 /// Ordered summaries from a multi-root content visit.

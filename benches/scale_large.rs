@@ -18,6 +18,10 @@ const DEFAULT_RUNS: usize = 5;
 
 fn main() {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    if arguments.is_empty() {
+        eprintln!("scale_large: skipped because no explicit corpus command was supplied");
+        return;
+    }
     let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
         usage();
     };

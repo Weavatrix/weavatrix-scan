@@ -249,8 +249,8 @@ fn inspect_chunk(
 }
 
 #[allow(clippy::too_many_lines)]
-pub(crate) fn visit_files<V>(
-    files: Vec<(u64, CompactScannedFile)>,
+pub(crate) fn visit_files<V, I>(
+    files: I,
     options: &ScanOptions,
     started: Instant,
     context: ContentWorkerContext<'_>,
@@ -259,10 +259,11 @@ pub(crate) fn visit_files<V>(
 ) -> Result<VisitedFiles>
 where
     V: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl,
+    I: IntoIterator<Item = (u64, CompactScannedFile)>,
 {
-    let mut visited = VisitedFiles::empty(files.len());
     let stop = InspectionStop::default();
     let mut iterator = files.into_iter();
+    let mut visited = VisitedFiles::empty(iterator.size_hint().0);
     while let Some((sequence, mut compact)) = iterator.next() {
         if let Some(reason) = stop.reason(options, started) {
             record_limit_skip(

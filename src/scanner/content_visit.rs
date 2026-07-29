@@ -13,6 +13,7 @@ use crate::report::{CompactContentEvidence, CompactScannedFile, FileVersion, Sca
 use crate::runtime::ParallelRuntime;
 use crate::scan_limits::ScanRuntime;
 use crate::walker::{ErrorPolicy, Walker};
+use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -611,21 +612,22 @@ fn finish_content_report(
         evidence.complete = false;
     }
     sort_evidence(&mut evidence);
-    let revision = if mode == ContentVisitMode::Revision {
+    let (revision, files) = if mode == ContentVisitMode::Revision {
         selected.sort_unstable_by(|left, right| left.1.relative.cmp(&right.1.relative));
         let files = selected
             .into_iter()
             .map(|(_, file)| file)
             .collect::<Vec<_>>();
-        compact_revision(&evidence, &files)
+        (compact_revision(&evidence, &files), files)
     } else {
-        String::new()
+        (String::new(), Vec::new())
     };
     let stopped = evidence.termination.is_some();
     evidence.finish_recording();
     ContentVisitReport {
         mode,
         root: evidence.root,
+        files,
         discovered,
         completed: totals.completed,
         opened: totals.opened,
@@ -688,23 +690,16 @@ where
         .map(|report| vec![report]);
     }
 
-    let chunk_size = indexed.len().div_ceil(workers);
-    let mut indexed = indexed.into_iter();
-    let mut chunks = Vec::with_capacity(workers);
-    loop {
-        let chunk = indexed.by_ref().take(chunk_size).collect::<Vec<_>>();
-        if chunk.is_empty() {
-            break;
-        }
-        chunks.push(chunk);
-    }
+    let workers = workers.min(indexed.len());
+    let queue = Arc::new(Mutex::new(VecDeque::from(indexed)));
     let root = Arc::new(root);
     let options = Arc::new(options);
     let factory = Arc::new(factory);
     let (sender, receiver) = mpsc::channel();
     let mut scheduled = 0_usize;
     let mut schedule_error = None;
-    for (worker_index, chunk) in chunks.into_iter().enumerate() {
+    for worker_index in 0..workers {
+        let worker_queue = Arc::clone(&queue);
         let worker_root = Arc::clone(&root);
         let worker_options = Arc::clone(&options);
         let worker_factory = Arc::clone(&factory);
@@ -714,19 +709,37 @@ where
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 let mut visitor = worker_factory(worker_index);
                 let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
-                visit_files(
-                    chunk,
-                    &worker_options,
-                    started,
-                    ContentWorkerContext {
-                        root: worker_root.as_ref(),
-                        root_index,
-                        worker_index,
-                        mode,
-                    },
-                    &mut buffer,
-                    &mut visitor,
-                )
+                let mut aggregate = VisitedFiles::empty(0);
+                loop {
+                    let work = {
+                        let mut queue = worker_queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        queue.pop_front()
+                    };
+                    let Some(work) = work else {
+                        break;
+                    };
+                    let visited = visit_files(
+                        std::iter::once(work),
+                        &worker_options,
+                        started,
+                        ContentWorkerContext {
+                            root: worker_root.as_ref(),
+                            root_index,
+                            worker_index,
+                            mode,
+                        },
+                        &mut buffer,
+                        &mut visitor,
+                    )?;
+                    let stop = visited.visitor_quit || visited.evidence.termination.is_some();
+                    aggregate.merge(visited);
+                    if stop {
+                        break;
+                    }
+                }
+                Ok(aggregate)
             }));
             let _ = worker_sender.send((worker_index, outcome));
         }) {
@@ -819,5 +832,48 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn revision_visit_retains_a_reusable_manifest() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "weavatrix-content-manifest-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("value.rs"), "fn value() {}\n").unwrap();
+
+        let report = Scanner::new(&root)
+            .options(
+                ScanOptions::default()
+                    .with_extensions(["rs"])
+                    .selected_files_only(),
+            )
+            .visit_content(|_| |_| ContentVisitControl::Continue)
+            .unwrap();
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].relative.as_ref(), "value.rs");
+        assert!(
+            report.files[0]
+                .content_hash()
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
+
+        let materialized = report
+            .into_compact_scan_report()
+            .unwrap()
+            .into_scan_report();
+        assert_eq!(materialized.files.len(), 1);
+        assert_eq!(
+            materialized.files[0].absolute,
+            materialized.root.join("value.rs")
+        );
+        assert!(materialized.files[0].binary_checked);
+        assert!(materialized.files[0].content_hash.is_some());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
