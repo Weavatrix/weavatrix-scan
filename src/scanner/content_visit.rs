@@ -9,7 +9,9 @@ use crate::content_visit::{
 };
 use crate::error::{Error, Result};
 use crate::ignore::RepositoryMatcher;
-use crate::report::{CompactContentEvidence, CompactScannedFile, FileVersion, ScanReport};
+use crate::report::{
+    CompactContentEvidence, CompactScanReport, CompactScannedFile, FileVersion, ScanReport,
+};
 use crate::runtime::ParallelRuntime;
 use crate::scan_limits::ScanRuntime;
 use crate::walker::{ErrorPolicy, Walker};
@@ -49,6 +51,33 @@ impl Scanner {
             for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
     {
         self.visit_content_with_root(0, factory)
+    }
+
+    /// Visits selected file bytes once and returns the exact compact manifest
+    /// produced by those same verified reads.
+    ///
+    /// This additive API lets parsers consume bytes and retain incremental scan
+    /// evidence without changing the long-standing [`ContentVisitReport`]
+    /// construction contract used by existing scanner consumers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::visit_content`].
+    ///
+    /// # Panics
+    ///
+    /// Propagates callback panics like [`Self::visit_content`].
+    pub fn visit_content_manifest<Factory, Visitor>(
+        self,
+        factory: Factory,
+    ) -> Result<CompactScanReport>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        self.visit_content_with_root_mode_finished(0, ContentVisitMode::Revision, factory)
+            .map(FinishedContentVisit::into_manifest)
     }
 
     /// Visits selected bytes without retaining a selected-file manifest or
@@ -144,6 +173,21 @@ impl Scanner {
         mode: ContentVisitMode,
         factory: Factory,
     ) -> Result<ContentVisitReport>
+    where
+        Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
+        Visitor:
+            for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
+    {
+        self.visit_content_with_root_mode_finished(root_index, mode, factory)
+            .map(|finished| finished.report)
+    }
+
+    fn visit_content_with_root_mode_finished<Factory, Visitor>(
+        self,
+        root_index: usize,
+        mode: ContentVisitMode,
+        factory: Factory,
+    ) -> Result<FinishedContentVisit>
     where
         Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
         Visitor:
@@ -265,7 +309,7 @@ where
     removed.dedup();
     Ok(ChangedContentVisitOutcome::Visited(Box::new(
         ChangedContentVisitReport {
-            content: finish_content_report(evidence, discovered, worker_reports, mode),
+            content: finish_content_report(evidence, discovered, worker_reports, mode).report,
             removed,
         },
     )))
@@ -284,7 +328,7 @@ fn visit_content_direct<Factory, Visitor>(
     root_index: usize,
     mode: ContentVisitMode,
     factory: Factory,
-) -> Result<ContentVisitReport>
+) -> Result<FinishedContentVisit>
 where
     Factory: Fn(usize) -> Visitor + Send + Sync + 'static,
     Visitor: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl + Send + 'static,
@@ -588,12 +632,34 @@ fn collect_stream_outcomes(
     Ok(reports)
 }
 
+struct FinishedContentVisit {
+    report: ContentVisitReport,
+    files: Vec<CompactScannedFile>,
+}
+
+impl FinishedContentVisit {
+    fn into_manifest(self) -> CompactScanReport {
+        CompactScanReport {
+            root: self.report.root,
+            files: self.files,
+            skipped: self.report.skipped,
+            warnings: self.report.warnings,
+            ignore_sources: self.report.ignore_sources,
+            revision: self.report.revision,
+            complete: self.report.complete,
+            termination: self.report.termination,
+            portable: self.report.portable,
+            cache: self.report.cache,
+        }
+    }
+}
+
 fn finish_content_report(
     mut evidence: ScanReport,
     discovered: u64,
     worker_reports: Vec<VisitedFiles>,
     mode: ContentVisitMode,
-) -> ContentVisitReport {
+) -> FinishedContentVisit {
     let mut selected = Vec::new();
     let mut totals = VisitedFiles::empty(0);
     for mut worker in worker_reports {
@@ -624,26 +690,28 @@ fn finish_content_report(
     };
     let stopped = evidence.termination.is_some();
     evidence.finish_recording();
-    ContentVisitReport {
-        mode,
-        root: evidence.root,
+    FinishedContentVisit {
+        report: ContentVisitReport {
+            mode,
+            root: evidence.root,
+            discovered,
+            completed: totals.completed,
+            opened: totals.opened,
+            chunks: totals.chunks,
+            bytes_read: totals.bytes_read,
+            bytes_emitted: totals.bytes_emitted,
+            consumer_skipped: totals.consumer_skipped,
+            stopped,
+            skipped: evidence.skipped,
+            warnings: evidence.warnings,
+            ignore_sources: evidence.ignore_sources,
+            revision,
+            complete: evidence.complete,
+            termination: evidence.termination,
+            portable: evidence.portable,
+            cache: evidence.cache,
+        },
         files,
-        discovered,
-        completed: totals.completed,
-        opened: totals.opened,
-        chunks: totals.chunks,
-        bytes_read: totals.bytes_read,
-        bytes_emitted: totals.bytes_emitted,
-        consumer_skipped: totals.consumer_skipped,
-        stopped,
-        skipped: evidence.skipped,
-        warnings: evidence.warnings,
-        ignore_sources: evidence.ignore_sources,
-        revision,
-        complete: evidence.complete,
-        termination: evidence.termination,
-        portable: evidence.portable,
-        cache: evidence.cache,
     }
 }
 
@@ -853,7 +921,7 @@ mod tests {
                     .with_extensions(["rs"])
                     .selected_files_only(),
             )
-            .visit_content(|_| |_| ContentVisitControl::Continue)
+            .visit_content_manifest(|_| |_| ContentVisitControl::Continue)
             .unwrap();
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].relative.as_ref(), "value.rs");
@@ -863,10 +931,7 @@ mod tests {
                 .is_some_and(|hash| hash.starts_with("sha256:"))
         );
 
-        let materialized = report
-            .into_compact_scan_report()
-            .unwrap()
-            .into_scan_report();
+        let materialized = report.into_scan_report();
         assert_eq!(materialized.files.len(), 1);
         assert_eq!(
             materialized.files[0].absolute,

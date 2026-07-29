@@ -632,3 +632,29 @@ fn multi_scanner_quit_cancels_content_across_roots() {
             < 64
     );
 }
+
+#[test]
+fn legacy_content_visit_report_literal_remains_source_compatible() {
+    let report = weavatrix_scan::ContentVisitReport {
+        mode: weavatrix_scan::ContentVisitMode::Revision,
+        root: std::path::PathBuf::from("."),
+        discovered: 0,
+        completed: 0,
+        opened: 0,
+        chunks: 0,
+        bytes_read: 0,
+        bytes_emitted: 0,
+        consumer_skipped: 0,
+        stopped: false,
+        skipped: Vec::new(),
+        warnings: Vec::new(),
+        ignore_sources: Vec::new(),
+        revision: String::new(),
+        complete: true,
+        termination: None,
+        portable: true,
+        cache: weavatrix_scan::ScanCacheStats::default(),
+    };
+
+    assert_eq!(report.completed, 0);
+}
