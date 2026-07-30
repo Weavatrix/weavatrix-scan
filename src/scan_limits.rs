@@ -1,4 +1,5 @@
 use crate::config::{EvidenceMode, ScanOptions};
+use crate::control::CancellationToken;
 use crate::report::{ScanReport, ScanTermination, SkipKind, SkippedEntry};
 use std::time::Instant;
 
@@ -37,7 +38,7 @@ impl ScanRuntime {
         if options
             .cancellation
             .as_ref()
-            .is_some_and(crate::CancellationToken::is_cancelled)
+            .is_some_and(CancellationToken::is_cancelled)
         {
             return Some(ScanTermination::Cancelled);
         }

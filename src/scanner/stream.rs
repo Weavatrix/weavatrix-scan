@@ -1,4 +1,4 @@
-use super::{Scanner, discover_repository_with_options};
+use super::{Scanner, discovery::discover_repository_with_options};
 use crate::content::inspect_files;
 use crate::error::Result;
 use crate::scan_finalize::{RevisionBuilder, sort_report_evidence};

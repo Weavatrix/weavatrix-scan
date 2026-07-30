@@ -132,13 +132,12 @@ fn push_char(output: &mut String, character: char) {
 
 #[cfg(test)]
 mod tests {
-    use super::normalized_relative_path;
     use std::path::Path;
 
     #[test]
     fn normalizes_separators_and_escapes_percent_without_loss() {
         assert_eq!(
-            normalized_relative_path(Path::new("src").join("100%").join("lib.rs").as_path()),
+            super::normalized_relative_path(Path::new("src").join("100%").join("lib.rs").as_path(),),
             "src/100%25/lib.rs"
         );
     }

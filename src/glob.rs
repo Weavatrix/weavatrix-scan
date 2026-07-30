@@ -216,22 +216,26 @@ fn escaped_member(pattern: &[u8], index: usize) -> Option<(u8, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::matches;
-
     #[test]
     fn supports_gitignore_wildcards_and_path_boundaries() {
-        assert!(matches("*.rs", "lib.rs"));
-        assert!(!matches("*.rs", "src/lib.rs"));
-        assert!(matches("src/**/generated.rs", "src/a/b/generated.rs"));
-        assert!(matches("src/**/generated.rs", "src/generated.rs"));
-        assert!(!matches("src/*/generated.rs", "src/a/b/generated.rs"));
+        assert!(super::matches("*.rs", "lib.rs"));
+        assert!(!super::matches("*.rs", "src/lib.rs"));
+        assert!(super::matches(
+            "src/**/generated.rs",
+            "src/a/b/generated.rs"
+        ));
+        assert!(super::matches("src/**/generated.rs", "src/generated.rs"));
+        assert!(!super::matches(
+            "src/*/generated.rs",
+            "src/a/b/generated.rs"
+        ));
     }
 
     #[test]
     fn supports_character_classes_ranges_and_escaping() {
-        assert!(matches("[a-c].rs", "b.rs"));
-        assert!(!matches("[!a-c].rs", "b.rs"));
-        assert!(matches("[!a-c].rs", "z.rs"));
-        assert!(matches(r"file\[1\].rs", "file[1].rs"));
+        assert!(super::matches("[a-c].rs", "b.rs"));
+        assert!(!super::matches("[!a-c].rs", "b.rs"));
+        assert!(super::matches("[!a-c].rs", "z.rs"));
+        assert!(super::matches(r"file\[1\].rs", "file[1].rs"));
     }
 }

@@ -239,7 +239,7 @@ fn normalized_extension(extension: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{NamedFileTypes, pattern_from_glob};
+    use crate::file_types::{NamedFileTypes, pattern_from_glob};
 
     #[test]
     fn defaults_include_every_ignore_name_and_pattern() {

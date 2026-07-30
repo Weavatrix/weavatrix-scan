@@ -1,6 +1,5 @@
-use crate::ScannedFile;
 use crate::report::{
-    IgnoreSourceEvidence, ScanCacheStats, ScanTermination, ScanWarning, SkippedEntry,
+    IgnoreSourceEvidence, ScanCacheStats, ScanTermination, ScanWarning, ScannedFile, SkippedEntry,
 };
 use std::path::PathBuf;
 

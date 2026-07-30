@@ -127,7 +127,7 @@ fn file_identity(_file: &File, _metadata: &Metadata) -> std::io::Result<Option<F
 
 #[cfg(test)]
 mod tests {
-    use super::{from_file, from_metadata, reusable, snapshot};
+    use crate::file_version::{from_file, from_metadata, reusable, snapshot};
 
     #[test]
     fn stable_file_versions_are_reusable() {

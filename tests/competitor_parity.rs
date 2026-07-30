@@ -12,11 +12,11 @@ use weavatrix_scan::{
     ParallelWalker, ScanOptions, Scanner, SkipKind, StandardSkips, WalkOptions, Walker,
 };
 
-#[path = "competitor_parity/basics.rs"]
+#[path = "cases/competitor_parity/basics.rs"]
 mod basics;
-#[path = "competitor_parity/randomized.rs"]
+#[path = "cases/competitor_parity/randomized.rs"]
 mod randomized;
-#[path = "competitor_parity/unix.rs"]
+#[path = "cases/competitor_parity/unix.rs"]
 mod unix;
 
 fn ignore_crate_files(root: &Path, extensions: &[&str]) -> BTreeSet<String> {

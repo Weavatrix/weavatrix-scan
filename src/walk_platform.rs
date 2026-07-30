@@ -2,14 +2,7 @@ use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct FileSystemId(pub(crate) u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct DirectoryIdentity {
-    pub(crate) file_system: FileSystemId,
-    pub(crate) file: u64,
-}
+use crate::walk_types::{DirectoryIdentity, FileSystemId};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PlatformDirectoryInfo {

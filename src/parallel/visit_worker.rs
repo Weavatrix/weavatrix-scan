@@ -1,6 +1,6 @@
 use super::visit::{ParallelVisitReport, WalkControl, WalkEvent};
-use crate::FileIdentity;
 use crate::control::CancellationToken;
+use crate::report::FileIdentity;
 use crate::walker::{ErrorPolicy, WalkError, WalkOptions, Walker};
 use std::path::Path;
 

@@ -135,22 +135,21 @@ impl Drop for ThreadPool {
 
 #[cfg(test)]
 mod tests {
-    use super::ThreadPool;
     use std::sync::mpsc;
 
     #[test]
     fn global_pool_executes_jobs() {
         let (sender, receiver) = mpsc::channel();
-        ThreadPool::global()
+        super::ThreadPool::global()
             .execute(Box::new(move || sender.send(42).unwrap()))
             .unwrap();
         assert_eq!(receiver.recv().unwrap(), 42);
-        assert!(ThreadPool::global().workers() > 0);
+        assert!(super::ThreadPool::global().workers() > 0);
     }
 
     #[test]
     fn dedicated_pool_stops_after_finishing_queued_jobs() {
-        let pool = ThreadPool::with_workers(2).unwrap();
+        let pool = super::ThreadPool::with_workers(2).unwrap();
         let (sender, receiver) = mpsc::channel();
         pool.execute(Box::new(move || sender.send(7).unwrap()))
             .unwrap();

@@ -1,7 +1,8 @@
 use super::{ParallelMultiWalker, root_worker_count};
-use crate::{
-    CancellationToken, ParallelVisitReport, ParallelWalker, WalkControl, WalkError, WalkEvent,
-};
+use crate::control::CancellationToken;
+use crate::parallel::{ParallelVisitReport, ParallelWalker, WalkControl, WalkEvent};
+use crate::runtime::ParallelRuntime;
+use crate::walk_types::WalkError;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -169,7 +170,7 @@ fn visit_root<F>(
     options: crate::WalkOptions,
     traversal_parallelism: usize,
     skip_stdout: bool,
-    runtime: crate::ParallelRuntime,
+    runtime: ParallelRuntime,
     cancellation: &CancellationToken,
     visitor: Arc<F>,
 ) -> Result<ParallelVisitReport, WalkError>

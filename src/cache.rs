@@ -1,4 +1,5 @@
 use crate::report::{CompactScanReport, FileVersion, ScanReport};
+use crate::watch::WatchPlan;
 use std::path::{Path, PathBuf};
 
 /// Current on-disk format understood by [`ScanCache`].
@@ -85,7 +86,7 @@ impl ScanCache {
     /// Applies a watcher plan, clearing everything when selection may change.
     ///
     /// Returns the number of entries removed.
-    pub fn apply_watch_plan(&mut self, plan: &crate::WatchPlan) -> usize {
+    pub fn apply_watch_plan(&mut self, plan: &WatchPlan) -> usize {
         if plan.full_rescan {
             let removed = self.entries.len();
             self.entries.clear();

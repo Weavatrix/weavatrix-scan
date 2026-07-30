@@ -5,7 +5,7 @@ use crate::ignore::{IgnoreRules, RepositoryMatch, RepositoryMatcher};
 use crate::path::normalized_relative_path;
 use crate::report::{FileVersion, ScanReport, ScannedFile, SkipKind};
 use crate::scan_match::skip_match;
-use crate::walker::{WalkEntry, WalkError, WalkOperation, WalkSkipReason};
+use crate::walk_types::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason};
 use std::fs;
 use std::path::Path;
 
@@ -218,7 +218,7 @@ fn record_local_io_error(
     options: &ScanOptions,
     report: &mut ScanReport,
 ) -> Result<()> {
-    if options.walk.error_policy == crate::ErrorPolicy::Abort {
+    if options.walk.error_policy == ErrorPolicy::Abort {
         return Err(Error::io(path, source));
     }
     let message = format!("{}: {source}", operation_label(operation));

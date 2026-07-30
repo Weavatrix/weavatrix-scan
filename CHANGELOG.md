@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.4.6 - 2026-07-30
+
+- split selection, ignore, traversal, scheduling, content delivery, reporting,
+  runtime, and scanner orchestration into focused domain modules while
+  preserving the public API;
+- enforce strict modular layering, zero runtime cycles, 300-line file and
+  100-line function budgets, no exceptions, and no ambiguous Rust module
+  layouts;
+- move internal imports away from public facade re-exports so component
+  dependencies are explicit;
+- split integration and benchmark scenarios so verification code obeys the
+  same maintainability budget as production code;
+- retain all 143 tests, strict Clippy, documentation, and all six benchmark
+  build targets.
+
 ## 0.4.3 - 2026-07-28
 
 - Add path-free `ScanSummary` aggregation for full and compact reports, with

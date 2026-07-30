@@ -1,4 +1,4 @@
-use crate::FileIdentity;
+use crate::report::FileIdentity;
 use crate::walker::{WalkEntry, WalkError, WalkOptions, Walker};
 use std::cmp::Ordering;
 use std::ffi::OsStr;

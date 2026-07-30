@@ -10,13 +10,13 @@ use weavatrix_scan::{
     Walker,
 };
 
-#[path = "walker/contracts.rs"]
+#[path = "cases/walker/contracts.rs"]
 mod contracts;
-#[path = "walker/errors_parallel.rs"]
+#[path = "cases/walker/errors_parallel.rs"]
 mod errors_parallel;
-#[path = "walker/links.rs"]
+#[path = "cases/walker/links.rs"]
 mod links;
-#[path = "walker/native.rs"]
+#[path = "cases/walker/native.rs"]
 mod native;
 
 #[cfg(unix)]

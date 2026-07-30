@@ -237,7 +237,7 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContentFingerprint, FingerprintHasher, hash_bytes};
+    use crate::hash::{ContentFingerprint, FingerprintHasher, hash_bytes};
 
     #[test]
     fn matches_sha256_known_vectors_and_streaming() {

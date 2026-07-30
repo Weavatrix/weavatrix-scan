@@ -1,4 +1,4 @@
-use crate::{
+use crate::report::{
     CompactScanReport, ScanCacheStats, ScanReport, ScanTermination, SkipKind, SkippedEntry,
 };
 use std::collections::BTreeMap;

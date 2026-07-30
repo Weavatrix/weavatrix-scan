@@ -1,5 +1,5 @@
 use super::ScanOptions;
-use crate::walker::{ErrorPolicy, RootSymlinkPolicy};
+use crate::walk_types::{ErrorPolicy, RootSymlinkPolicy};
 
 impl ScanOptions {
     #[must_use]

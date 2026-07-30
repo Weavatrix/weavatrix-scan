@@ -6,7 +6,7 @@ use super::{
 use crate::error::{Error, Result};
 use crate::path::normalized_relative_path;
 use crate::report::{IgnoreSourceEvidence, IgnoreSourceKind, ScanWarning};
-use crate::walker::WalkEntry;
+use crate::walk_types::{ErrorPolicy, WalkEntry};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -133,7 +133,7 @@ impl RepositoryMatcher {
 
     pub(super) fn handle_errors(&mut self, errors: Vec<IgnoreError>) -> Result<()> {
         for source in errors {
-            if self.error_policy == crate::walker::ErrorPolicy::Abort {
+            if self.error_policy == ErrorPolicy::Abort {
                 return Err(Error::io(
                     &source.path,
                     io::Error::new(source.kind(), source.to_string()),

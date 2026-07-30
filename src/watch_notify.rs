@@ -1,4 +1,4 @@
-use crate::{WatchEvent, WatchEventKind, WatchPlan, WatcherEventAdapter};
+use crate::watch::{WatchEvent, WatchEventKind, WatchPlan, WatcherEventAdapter};
 use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{Event, EventKind};
 use std::path::PathBuf;

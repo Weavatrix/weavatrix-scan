@@ -868,6 +868,35 @@ deep trees, permission errors, raw non-UTF8 ignore rules/names, percent escapes,
 and followed symlink loops. The
 differential suite and competitor crates are dev-only.
 
+## Enforced modular architecture
+
+Repository traversal is separated from selection policy and manifest
+orchestration:
+
+```text
+contracts and evidence
+    |
+selection policy
+  ignore hierarchy · globs · typed decisions
+    |
+bounded traversal
+  serial · parallel · streaming · runtime ownership
+    |
+scan engine
+  content delivery · hashes · revision · reports · watch updates
+    |
+public facade
+```
+
+The implementation uses one unambiguous `foo/mod.rs` layout and domain names
+such as `discovery`, `inspection`, `scheduler`, and `configuration`; it is not
+split into arbitrary numbered chunks.
+
+`.weavatrix/architecture.json` is verified against the crate's own graph.
+Release gates require zero runtime cycles, files no larger than 300 physical
+lines, functions no larger than 100 physical lines, no exceptions, an empty
+baseline, strict Clippy, all platform tests, and benchmark compilation.
+
 ## Safety model
 
 - never executes repository code;

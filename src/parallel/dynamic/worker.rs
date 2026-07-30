@@ -1,7 +1,7 @@
 use super::{BatchControl, DirectoryTask, Shared, TaskReport};
 use crate::control::CancellationToken;
 use crate::runtime::ParallelRuntime;
-use crate::walk_platform::FileSystemId;
+use crate::walk_types::{DirectoryIdentity, FileSystemId};
 use crate::walker::{ErrorPolicy, WalkEntry, WalkError, WalkOptions, Walker};
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
@@ -193,7 +193,7 @@ fn report_for<F>(
     entries: &[WalkEntry],
     errors: Vec<WalkError>,
     parent_depth: usize,
-    ancestors: &Arc<std::collections::HashSet<crate::walk_platform::DirectoryIdentity>>,
+    ancestors: &Arc<std::collections::HashSet<DirectoryIdentity>>,
     options: WalkOptions,
     visitor: &F,
 ) -> TaskReport
@@ -239,7 +239,7 @@ where
 
 fn child_task(
     entry: &WalkEntry,
-    ancestors: &Arc<std::collections::HashSet<crate::walk_platform::DirectoryIdentity>>,
+    ancestors: &Arc<std::collections::HashSet<DirectoryIdentity>>,
 ) -> DirectoryTask {
     let identity = entry.directory_identity();
     let ancestors = identity.map_or_else(

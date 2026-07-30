@@ -1,5 +1,7 @@
+use super::support::termination_code;
 use super::*;
-use crate::{CancellationToken, ScanTermination};
+use crate::control::CancellationToken;
+use crate::report::{FileVersion, ScanTermination};
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -124,10 +126,9 @@ fn scanned(absolute: std::path::PathBuf, relative: &str) -> ScannedFile {
         bytes: metadata.as_ref().map_or(0, std::fs::Metadata::len),
         content_hash: None,
         content_fingerprint: None,
-        version: metadata.as_ref().map_or_else(
-            crate::FileVersion::default,
-            crate::file_version::from_metadata,
-        ),
+        version: metadata
+            .as_ref()
+            .map_or_else(FileVersion::default, crate::file_version::from_metadata),
         binary_checked: false,
     }
 }

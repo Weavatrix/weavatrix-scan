@@ -1,55 +1,89 @@
 {
   "architectureContractV": 1,
-  "name": "Weavatrix Scan layered library",
-  "style": "layered",
-  "enforcement": "ratchet",
+  "name": "Weavatrix Scan modular layered library",
+  "style": "modular-layered",
+  "enforcement": "strict",
   "components": [
-    {
-      "id": "crate-root",
-      "name": "Public crate surface",
-      "paths": ["src/lib.rs"]
-    },
     {
       "id": "contracts",
       "name": "Public contracts and evidence",
       "paths": [
-        "src/config.rs",
+        "src/cache.rs",
+        "src/config",
+        "src/content_visit.rs",
+        "src/control.rs",
+        "src/default_file_types.rs",
         "src/error.rs",
-        "src/report.rs",
-        "src/walk_types.rs",
-        "src/path_serde.rs"
+        "src/file_types.rs",
+        "src/glob.rs",
+        "src/path.rs",
+        "src/path_serde.rs",
+        "src/portable_report.rs",
+        "src/report",
+        "src/scan_stream.rs",
+        "src/summary.rs",
+        "src/walk_types",
+        "src/watch.rs"
       ]
+    },
+    {
+      "id": "integrity",
+      "name": "Shared hashing primitives",
+      "paths": ["src/hash.rs"]
+    },
+    {
+      "id": "platform",
+      "name": "Filesystem identity adapter",
+      "paths": [
+        "src/file_version.rs",
+        "src/hidden.rs",
+        "src/stdout.rs",
+        "src/walk_platform.rs",
+        "src/watch_notify.rs"
+      ]
+    },
+    {
+      "id": "selection",
+      "name": "Selection and ignore policy",
+      "paths": ["src/selection", "src/ignore", "src/scan_match.rs"]
     },
     {
       "id": "traversal",
-      "name": "Filesystem traversal",
+      "name": "Bounded filesystem traversal",
       "paths": [
-        "src/walker.rs",
+        "src/walker",
         "src/walk_iter.rs",
-        "src/walk_platform.rs",
         "src/walk_visit.rs",
-        "src/parallel.rs",
-        "src/pool.rs"
-      ]
-    },
-    {
-      "id": "filtering",
-      "name": "Ignore and glob filtering",
-      "paths": [
-        "src/ignore.rs",
-        "src/ignore",
-        "src/glob.rs"
+        "src/parallel",
+        "src/parallel_multi",
+        "src/stateful_walk",
+        "src/pool.rs",
+        "src/runtime",
+        "src/walk_builder.rs"
       ]
     },
     {
       "id": "scan-engine",
-      "name": "Manifest scan engine",
+      "name": "Deterministic manifest engine",
       "paths": [
-        "src/scanner.rs",
-        "src/content.rs",
+        "src/scanner",
+        "src/content",
+        "src/delta.rs",
+        "src/multi_scanner.rs",
         "src/scan_finalize.rs",
-        "src/path.rs"
+        "src/scan_limits.rs",
+        "src/snapshot.rs"
       ]
+    },
+    {
+      "id": "facade",
+      "name": "Public crate facade",
+      "paths": ["src/lib.rs"]
+    },
+    {
+      "id": "integration-tests",
+      "name": "Integration tests",
+      "paths": ["tests"]
     },
     {
       "id": "benchmarks",
@@ -57,12 +91,54 @@
       "paths": ["benches"]
     }
   ],
-  "dependencyRules": [],
+  "dependencyRules": [
+    {
+      "id": "integrity-is-inward",
+      "action": "forbid",
+      "from": ["integrity"],
+      "to": ["contracts", "platform", "selection", "traversal", "scan-engine", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "platform-is-inward",
+      "action": "forbid",
+      "from": ["platform"],
+      "to": ["selection", "traversal", "scan-engine", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "contracts-are-inward",
+      "action": "forbid",
+      "from": ["contracts"],
+      "to": ["platform", "selection", "traversal", "scan-engine", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "selection-does-not-orchestrate",
+      "action": "forbid",
+      "from": ["selection"],
+      "to": ["traversal", "scan-engine", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "traversal-does-not-own-manifests",
+      "action": "forbid",
+      "from": ["traversal"],
+      "to": ["scan-engine", "facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    },
+    {
+      "id": "engine-does-not-depend-on-facade",
+      "action": "forbid",
+      "from": ["scan-engine"],
+      "to": ["facade"],
+      "kinds": ["imports", "re_exports", "depends_on"]
+    }
+  ],
   "budgets": {
     "runtimeCycles": 0,
     "maxFileLoc": 300,
-    "maxFunctionLoc": 120,
-    "maxCyclomatic": 15
+    "maxFunctionLoc": 100
   },
   "technologies": {
     "required": ["rust"],

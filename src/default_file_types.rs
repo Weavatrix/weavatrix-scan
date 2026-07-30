@@ -260,7 +260,7 @@ pub(crate) const DEFAULT_FILE_TYPES: &[(&[&str], &[&str])] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::DEFAULT_FILE_TYPES;
+    use crate::default_file_types::DEFAULT_FILE_TYPES;
     use std::collections::BTreeSet;
 
     #[test]

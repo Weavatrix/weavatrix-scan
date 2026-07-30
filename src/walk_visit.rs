@@ -1,9 +1,19 @@
 use crate::report::FileVersion;
 use crate::walk_platform::directory_info;
-use crate::walk_types::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason};
+use crate::walk_types::{
+    DirectoryIdentity, ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSkipReason,
+};
 use crate::walker::{PendingDirectory, Walker};
 use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
+
+struct EntryFacts {
+    is_symlink: bool,
+    is_file: bool,
+    is_directory: bool,
+    directory_identity: Option<DirectoryIdentity>,
+    skip_reason: Option<WalkSkipReason>,
+}
 
 impl Walker {
     #[allow(clippy::inline_always)]
@@ -49,71 +59,20 @@ impl Walker {
         mut version: Option<FileVersion>,
         mut hidden: Option<bool>,
     ) -> Result<WalkEntry, WalkError> {
-        let file_type = entry_file_type(&path, depth, file_type)?;
-        let is_symlink = file_type.is_symlink();
-        let mut is_file = file_type.is_file();
-        let mut is_directory = file_type.is_dir();
-        let mut skip_reason = None;
-        let mut directory_identity = None;
-
-        let target_metadata = if is_symlink && self.options.follow_links {
-            let metadata = fs::metadata(&path).map_err(|source| {
-                WalkError::new(&path, depth, WalkOperation::ReadMetadata, source)
-            })?;
-            is_file = metadata.is_file();
-            is_directory = metadata.is_dir();
-            if self.options.collect_metadata && is_file {
-                (bytes, version, hidden) = metadata_evidence(&path, &metadata);
-            }
-            Some(metadata)
-        } else {
-            None
-        };
-
-        if is_symlink && !self.options.follow_links {
-            is_file = false;
-            is_directory = false;
-        } else if is_symlink
-            || (is_directory && (self.options.same_file_system || self.options.follow_links))
-        {
-            let canonical = if depth == 0 {
-                self.root.as_ref().clone()
-            } else {
-                path.canonicalize().map_err(|source| {
-                    WalkError::new(&path, depth, WalkOperation::Canonicalize, source)
-                })?
-            };
-            if !canonical.starts_with(self.root.as_path()) {
-                skip_reason = Some(WalkSkipReason::PathEscape);
-            } else if is_directory {
-                let owned_metadata;
-                let metadata = if let Some(metadata) = target_metadata.as_ref() {
-                    metadata
-                } else {
-                    owned_metadata = fs::metadata(&path).map_err(|source| {
-                        WalkError::new(&path, depth, WalkOperation::ReadMetadata, source)
-                    })?;
-                    &owned_metadata
-                };
-                let info = if depth == 0 {
-                    self.root_directory_info
-                        .expect("directory identity was requested")
-                } else {
-                    directory_info(&canonical, metadata).map_err(|source| {
-                        WalkError::new(&path, depth, WalkOperation::ReadMetadata, source)
-                    })?
-                };
-                if self.options.same_file_system
-                    && self.root_file_system.is_some()
-                    && Some(info.file_system) != self.root_file_system
-                {
-                    skip_reason = Some(WalkSkipReason::FileSystemBoundary);
-                }
-                if self.options.follow_links {
-                    directory_identity = Some(info.identity);
-                }
-            }
-        }
+        let EntryFacts {
+            is_symlink,
+            is_file,
+            is_directory,
+            directory_identity,
+            mut skip_reason,
+        } = self.entry_facts(
+            &path,
+            depth,
+            file_type,
+            &mut bytes,
+            &mut version,
+            &mut hidden,
+        )?;
 
         if is_directory && skip_reason.is_none() {
             if self
@@ -151,6 +110,90 @@ impl Walker {
             bytes,
             version,
             hidden,
+            directory_identity,
+            skip_reason,
+        })
+    }
+
+    fn entry_facts(
+        &self,
+        path: &Path,
+        depth: usize,
+        file_type: Option<FileType>,
+        bytes: &mut Option<u64>,
+        version: &mut Option<FileVersion>,
+        hidden: &mut Option<bool>,
+    ) -> Result<EntryFacts, WalkError> {
+        let file_type = entry_file_type(path, depth, file_type)?;
+        let is_symlink = file_type.is_symlink();
+        let mut is_file = file_type.is_file();
+        let mut is_directory = file_type.is_dir();
+        let mut skip_reason = None;
+        let mut directory_identity = None;
+
+        let target_metadata = if is_symlink && self.options.follow_links {
+            let metadata = fs::metadata(path).map_err(|source| {
+                WalkError::new(path, depth, WalkOperation::ReadMetadata, source)
+            })?;
+            is_file = metadata.is_file();
+            is_directory = metadata.is_dir();
+            if self.options.collect_metadata && is_file {
+                (*bytes, *version, *hidden) = metadata_evidence(path, &metadata);
+            }
+            Some(metadata)
+        } else {
+            None
+        };
+
+        if is_symlink && !self.options.follow_links {
+            is_file = false;
+            is_directory = false;
+        } else if is_symlink
+            || (is_directory && (self.options.same_file_system || self.options.follow_links))
+        {
+            let canonical = if depth == 0 {
+                self.root.as_ref().clone()
+            } else {
+                path.canonicalize().map_err(|source| {
+                    WalkError::new(path, depth, WalkOperation::Canonicalize, source)
+                })?
+            };
+            if !canonical.starts_with(self.root.as_path()) {
+                skip_reason = Some(WalkSkipReason::PathEscape);
+            } else if is_directory {
+                let owned_metadata;
+                let metadata = if let Some(metadata) = target_metadata.as_ref() {
+                    metadata
+                } else {
+                    owned_metadata = fs::metadata(path).map_err(|source| {
+                        WalkError::new(path, depth, WalkOperation::ReadMetadata, source)
+                    })?;
+                    &owned_metadata
+                };
+                let info = if depth == 0 {
+                    self.root_directory_info
+                        .expect("directory identity was requested")
+                } else {
+                    directory_info(&canonical, metadata).map_err(|source| {
+                        WalkError::new(path, depth, WalkOperation::ReadMetadata, source)
+                    })?
+                };
+                if self.options.same_file_system
+                    && self.root_file_system.is_some()
+                    && Some(info.file_system) != self.root_file_system
+                {
+                    skip_reason = Some(WalkSkipReason::FileSystemBoundary);
+                }
+                if self.options.follow_links {
+                    directory_identity = Some(info.identity);
+                }
+            }
+        }
+
+        Ok(EntryFacts {
+            is_symlink,
+            is_file,
+            is_directory,
             directory_identity,
             skip_reason,
         })

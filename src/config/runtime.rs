@@ -1,5 +1,5 @@
 use super::ScanOptions;
-use crate::walker::WalkOptions;
+use crate::walk_types::WalkOptions;
 
 impl ScanOptions {
     pub(crate) fn worker_count(&self, file_count: usize) -> usize {
