@@ -26,6 +26,7 @@ mod multi_scanner;
 mod parallel;
 mod parallel_multi;
 mod path;
+mod path_pattern;
 #[cfg(feature = "serde")]
 mod path_serde;
 mod pool;
@@ -75,6 +76,7 @@ pub use parallel::{
 pub use parallel_multi::{
     ParallelMultiVisitReport, ParallelMultiWalkEvent, ParallelMultiWalkReport, ParallelMultiWalker,
 };
+pub use path_pattern::{PathPattern, PathPatternError, PathPatternErrorKind};
 pub use portable_report::{
     PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
     PortableSkippedEntry,

@@ -17,6 +17,7 @@
         "src/file_types.rs",
         "src/glob.rs",
         "src/path.rs",
+        "src/path_pattern.rs",
         "src/path_serde.rs",
         "src/portable_report.rs",
         "src/report",
