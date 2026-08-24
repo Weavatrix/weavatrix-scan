@@ -194,8 +194,8 @@ pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
 #[allow(clippy::many_single_char_names)]
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut schedule = [0_u32; 64];
-    for (index, word) in block.chunks_exact(4).enumerate() {
-        schedule[index] = u32::from_be_bytes(word.try_into().expect("SHA-256 word length"));
+    for (index, word) in block.as_chunks::<4>().0.iter().enumerate() {
+        schedule[index] = u32::from_be_bytes(*word);
     }
     for index in 16..64 {
         let s0 = schedule[index - 15].rotate_right(7)
