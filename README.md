@@ -1,10 +1,12 @@
 # Weavatrix Scan
 
-[![CI](https://github.com/sergii-ziborov/weavatrix-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/sergii-ziborov/weavatrix-scan/actions/workflows/ci.yml)
+[![CI](https://github.com/Weavatrix/weavatrix-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/Weavatrix/weavatrix-scan/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/weavatrix-scan.svg)](https://crates.io/crates/weavatrix-scan)
 [![docs.rs](https://docs.rs/weavatrix-scan/badge.svg)](https://docs.rs/weavatrix-scan)
-[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/sergii-ziborov/weavatrix-scan/blob/main/LICENSE)
-[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/sergii-ziborov/weavatrix-scan/blob/main/Cargo.toml)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Weavatrix/weavatrix-scan/blob/main/LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/Weavatrix/weavatrix-scan/blob/main/Cargo.toml)
+
+The filesystem-evidence layer of the [Weavatrix ecosystem](https://weavatrix.com/ecosystem).
 
 `weavatrix-scan` is a deterministic, read-only repository scanner for static
 analysis, code intelligence, indexing, and AI tooling.
@@ -44,9 +46,9 @@ layers:
   shared by walker and scanner APIs.
 
 Within the wider Weavatrix stack, this crate owns repository discovery and
-selection, [`weavatrix-parse`](https://github.com/sergii-ziborov/weavatrix-parse)
+selection, [`weavatrix-parse`](https://github.com/Weavatrix/weavatrix-parse)
 owns dependency-free source tokenization and structural facts, and
-[`weavatrix-rust`](https://github.com/sergii-ziborov/weavatrix-rust) composes
+[`weavatrix-rust`](https://github.com/Weavatrix/weavatrix-rust) composes
 the scan and analysis layers. Go and Node walkers below are performance and
 capability controls, not proposed alternate implementations of that product
 pipeline.
@@ -1305,7 +1307,7 @@ stable test coverage on all three platforms.
 ## Relationship to Weavatrix
 
 `weavatrix-scan` owns repository discovery. It does not parse languages or
-build graphs. [`weavatrix-graph`](https://github.com/sergii-ziborov/weavatrix-graph)
+build graphs. [`weavatrix-graph`](https://github.com/Weavatrix/weavatrix-graph)
 owns typed graph primitives. Higher-level Weavatrix crates can compose both
 without coupling either library to MCP, a CLI, or language-specific parsers.
 
