@@ -1,10 +1,12 @@
 # weavatrix-scan
 
-An independent repository-scanning product, not just a directory walker.
+A deterministic, path-safe repository scanner — written in Rust, exposed to
+Node.js and Bun through Node-API.
 
-`weavatrix-scan` produces deterministic, path-safe manifests with normalized paths, byte sizes, optional hashes, aggregate revisions, ignore policy, bounded traversal, and typed evidence for skipped files. The npm package runs the same Rust scanner through Node-API; it does not execute repository code and does not depend on an MCP server.
-
-## Install
+Not a directory walker. It produces a manifest: normalized paths, byte sizes,
+optional content hashes, an aggregate revision, ignore-rule provenance, typed
+evidence for everything it skipped, and hard bounds it will not exceed. It
+executes no repository code.
 
 ```console
 npm install weavatrix-scan
@@ -21,30 +23,136 @@ const report = await scanRepository(process.cwd(), {
   maxFileBytes: 2_000_000,
 })
 
-console.log(report.revision)
-console.log(report.files)
-console.log(report.skipped)
+report.revision        // one hash for the whole selection
+report.files           // [{ relative, bytes, content_hash?, binary_checked }]
+report.skipped         // why each excluded entry was excluded
+report.complete        // false when a bound stopped the scan
 ```
 
-`scanRepository` runs on the native worker pool so the JavaScript API does not perform the scan on the event loop. `scanRepositorySync` is available for CLIs and controlled startup paths.
+---
 
-## Measured Node and Bun performance
+## Why a manifest instead of a list of paths
 
-Windows x64, 20,000 one-byte files, medians after two warmups, alternating execution order:
+Two runs over the same tree must produce the same bytes, or nothing built on
+top can be cached, diffed, or trusted. So the report carries:
 
-| Equal result | Runtime | Weavatrix | fdir 6.5.0 | Winner |
-| --- | --- | ---: | ---: | ---: |
-| Sorted paths only | Node 24.15.0 | 73.443 ms | 43.707 ms | fdir 1.68x |
-| Sorted paths only | Bun 1.4.0 | 54.977 ms | 30.280 ms | fdir 1.82x |
-| Sorted paths + byte sizes | Node 24.15.0 | 61.886 ms | 716.302 ms | Weavatrix 11.57x |
-| Sorted paths + byte sizes | Bun 1.4.0 | 56.170 ms | 455.607 ms | Weavatrix 8.11x |
+- **`revision`** — an aggregate hash of the selection. Equal revisions mean
+  equal selections, without comparing file lists.
+- **`skipped`** — typed evidence for every exclusion, so "the file is missing
+  from your output" always has an answer.
+- **`ignore_sources`** — which ignore files were consulted and their content
+  hashes, so a selection can be explained and reproduced.
+- **`complete` / `termination`** — an explicit statement that a bound was hit,
+  instead of a silently short list.
 
-The paths-only row keeps the narrower walker's win visible: Weavatrix still gathers scanner metadata while only paths are compared. For the path-plus-size contract, `fdir` adds `statSync` per file. Hashing and revision work are excluded from both. See the [full report and reproduction commands](https://github.com/Weavatrix/weavatrix-scan/blob/main/node/benchmark/RESULTS.md).
+---
 
-## Runtime and ownership boundary
+## API
 
-One self-contained npm package supports Node.js 18+ and Bun 1.4+ and includes the Windows, macOS, and glibc Linux binaries for x64 and arm64. No public platform-package names are created.
+### `scanRepository(root, options?) → Promise<ScanReport>`
 
-Scan owns its repository, package, release evidence, and MIT license. It can be used independently of every other Weavatrix product.
+Runs on the native worker pool; the JavaScript event loop stays free.
 
-Repository: [Weavatrix/weavatrix-scan](https://github.com/Weavatrix/weavatrix-scan) · Rust crate: [crates.io/crates/weavatrix-scan](https://crates.io/crates/weavatrix-scan) · License: [MIT](https://github.com/Weavatrix/weavatrix-scan/blob/main/LICENSE)
+### `scanRepositorySync(root, options?) → ScanReport`
+
+The blocking form, for CLIs and controlled startup paths.
+
+| Parameter | Type | Notes |
+| --- | --- | --- |
+| `root` | `string` | Repository root. Must be an existing directory. |
+| `options` | `ScanOptions` | See below. |
+
+### `ScanOptions`
+
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `extensions` | `string[]` | all | Restricts selection to these extensions, without a leading dot. |
+| `overrideRules` | `string[]` | — | Gitignore-syntax rules applied above discovered ignore files. A leading `!` re-includes. |
+| `metadataOnly` | `boolean` | `false` | Skips content reads: no hashing, no binary detection. The fastest useful mode. |
+| `selectedFilesOnly` | `boolean` | `false` | Returns only selected files and drops per-entry skip records, which keeps memory flat on very large trees. |
+| `skipHidden` | `boolean` | `true` | Whether dotfiles and dot-directories are skipped. |
+| `maxFileBytes` | `number` | scanner default | Files above this are skipped with typed evidence rather than read. |
+| `maxEntries` | `number` | unbounded | Hard entry bound. Hitting it sets `complete: false` and `termination`. |
+| `maxTotalBytes` | `number` | unbounded | Hard byte bound, same reporting. |
+| `maxDepth` | `number` | unbounded | Traversal depth bound. |
+| `parallelism` | `number` | available | Worker count. |
+
+---
+
+## `ScanReport`
+
+The report is the crate's **portable** report, so its field names are the
+serialized Rust names.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `files` | `ScannedFile[]` | The selection, in deterministic order. |
+| `skipped` | `{ relative, kind, detail_hash? }[]` | One record per exclusion. `kind` names the reason. |
+| `warnings` | `{ relative?, message_hash }[]` | Non-fatal problems, hashed so a report never leaks message text. |
+| `ignore_sources` | `{ kind, repository_relative?, content_hash }[]` | Which ignore inputs shaped this selection. |
+| `revision` | `string` | Aggregate hash of roots, paths, and content. |
+| `complete` | `boolean` | `false` when a bound stopped the scan. |
+| `termination` | `string \| undefined` | Which bound: entries, total bytes, timeout, or cancellation. |
+| `selection_portable` | `boolean` | Whether the selection is reproducible on another platform. |
+
+### `ScannedFile`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `relative` | `string` | Forward-slash path relative to `root`, on every platform. |
+| `bytes` | `number` | File size. |
+| `content_hash` | `string \| undefined` | Present unless `metadataOnly` was set. |
+| `binary_checked` | `boolean` | Whether binary detection actually ran on this file. |
+
+---
+
+## Errors
+
+| `code` | Cause |
+| --- | --- |
+| `InvalidArg` | Unknown option key, or malformed option JSON. |
+| `GenericFailure` | Root missing, unreadable, or not a directory. |
+
+---
+
+## What ships
+
+| | |
+| --- | --- |
+| Runtimes | Node.js 18+ (Node-API 8), Bun 1.4+ |
+| Platforms | Windows x64/arm64, macOS x64/arm64, glibc Linux x64/arm64 |
+| Install script | none |
+| Network at install | none |
+| Runtime dependencies | none |
+| Platform packages | none — all six bindings are in this one tarball |
+| Writes to disk | none |
+
+---
+
+## Measured
+
+[`benchmark/RESULTS.md`](benchmark/RESULTS.md) is generated from the
+[weavatrix-benchmarks](https://github.com/Weavatrix/weavatrix-benchmarks)
+harness, which forces both sides to return the identical array before either is
+timed. The competitor is `fdir`, the fastest widely used Node crawler.
+
+Medians of three independent runs over 20,000 files:
+
+| Contract | Node 24 | Bun 1.3 |
+| --- | ---: | ---: |
+| Sorted relative paths | **0.94x** (0.83–1.01) | **0.94x** (0.93–1.14) |
+| Sorted paths **plus byte sizes** | **80.1x** (77.5–82.7) | **86.7x** (84.0–92.4) |
+
+The first row is deliberately unfavourable and stays published: `fdir` returns
+raw paths while Weavatrix still performs its scanner metadata work, so the two
+land close together and the ordering flips between runs. The second row is the
+equal consumer-facing contract, where `fdir` needs one `statSync` per path.
+
+---
+
+Scan owns its repository, package, release evidence, and MIT license, and can
+be used entirely on its own.
+
+Repository: [Weavatrix/weavatrix-scan](https://github.com/Weavatrix/weavatrix-scan) ·
+Rust crate: [crates.io/crates/weavatrix-scan](https://crates.io/crates/weavatrix-scan) ·
+License: [MIT](https://github.com/Weavatrix/weavatrix-scan/blob/main/LICENSE)
