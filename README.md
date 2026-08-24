@@ -3,6 +3,7 @@
 [![CI](https://github.com/Weavatrix/weavatrix-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/Weavatrix/weavatrix-scan/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/weavatrix-scan.svg)](https://crates.io/crates/weavatrix-scan)
 [![docs.rs](https://docs.rs/weavatrix-scan/badge.svg)](https://docs.rs/weavatrix-scan)
+[![npm](https://img.shields.io/npm/v/weavatrix-scan.svg)](https://www.npmjs.com/package/weavatrix-scan)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Weavatrix/weavatrix-scan/blob/main/LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://github.com/Weavatrix/weavatrix-scan/blob/main/Cargo.toml)
 
@@ -189,7 +190,32 @@ on the Rust 1.88 MSRV. Reimplementing that layer locally would require unsafe
 WinAPI FFI and still depend on Windows bindings; this crate keeps
 `unsafe_code = "forbid"`.
 
-## Quick start
+## Node.js and Bun
+
+The `weavatrix-scan` npm package exposes the same Rust scanner through
+Node-API. It is not a JavaScript port and does not execute repository code.
+The async entrypoint runs outside the JavaScript event loop:
+
+```console
+npm install weavatrix-scan
+# or: bun add weavatrix-scan
+```
+
+```js
+const { scanRepository } = require('weavatrix-scan')
+
+const report = await scanRepository(process.cwd(), {
+  extensions: ['js', 'ts', 'rs'],
+  selectedFilesOnly: true,
+})
+```
+
+One package supports Node.js 18+ and Bun 1.4+ with native targets for Windows,
+macOS, and glibc Linux on x64 and arm64. The
+[Node/Bun benchmark report](node/benchmark/RESULTS.md) publishes both the raw
+walker loss and the equal path-plus-size scanner result.
+
+## Rust quick start
 
 ```rust
 use weavatrix_scan::{ScanOptions, Scanner};

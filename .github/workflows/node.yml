@@ -1,0 +1,56 @@
+name: Node and Bun native bindings
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path Cargo.toml -- --check
+      - name: Build native binding
+        run: npm run build -- --target ${{ matrix.target }}
+      - name: Test on Node 24
+        run: npm test
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Test on Bun 1.4
+        run: npm run test:bun
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 18
+          package-manager-cache: false
+      - name: Test Node-API 8 floor on Node 18
+        run: npm test
