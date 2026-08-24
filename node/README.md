@@ -43,7 +43,7 @@ The paths-only row keeps the narrower walker's win visible: Weavatrix still gath
 
 ## Runtime and ownership boundary
 
-One npm package supports Node.js 18+ and Bun 1.4+. Optional native packages cover Windows, macOS, and glibc Linux on x64 and arm64.
+One self-contained npm package supports Node.js 18+ and Bun 1.4+ and includes the Windows, macOS, and glibc Linux binaries for x64 and arm64. No public platform-package names are created.
 
 Scan owns its repository, package, release evidence, and MIT license. It can be used independently of every other Weavatrix product.
 

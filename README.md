@@ -210,8 +210,9 @@ const report = await scanRepository(process.cwd(), {
 })
 ```
 
-One package supports Node.js 18+ and Bun 1.4+ with native targets for Windows,
-macOS, and glibc Linux on x64 and arm64. The
+The single self-contained package supports Node.js 18+ and Bun 1.4+ and carries
+native binaries for Windows, macOS, and glibc Linux on x64 and arm64 without
+creating public platform-package names. The
 [Node/Bun benchmark report](node/benchmark/RESULTS.md) publishes both the raw
 walker loss and the equal path-plus-size scanner result: `fdir` won the
 paths-only rows by 1.68x-1.82x, while Weavatrix won the path-plus-size rows by

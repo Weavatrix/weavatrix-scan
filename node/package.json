@@ -1,6 +1,6 @@
 {
   "name": "weavatrix-scan",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Deterministic, safe Rust repository scanner for Node.js and Bun",
   "license": "MIT",
   "author": "Sergii Ziborov <sergii.ziborov@gmail.com>",
@@ -12,7 +12,7 @@
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
-  "files": ["lib/", "index.js", "index.d.ts", "README.md"],
+  "files": ["lib/", "index.js", "index.d.ts", "*.node", "README.md"],
   "engines": { "node": ">=18" },
   "publishConfig": { "registry": "https://registry.npmjs.org/", "access": "public" },
   "keywords": ["scanner", "repository", "gitignore", "rust", "node-api", "bun"],
@@ -34,9 +34,7 @@
     "build:windows:debug": "napi build --platform --target x86_64-pc-windows-msvc",
     "test": "node --test test/scan.test.js",
     "test:bun": "bun test ./test",
-    "bench": "node benchmark/fdir.mjs",
-    "artifacts": "napi artifacts",
-    "prepublishOnly": "napi pre-publish -t npm"
+    "bench": "node benchmark/fdir.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.8.6",

@@ -121,16 +121,54 @@ jobs:
           package-manager-cache: false
       - name: Install release tooling without lifecycle scripts
         run: npm ci --ignore-scripts
-      - name: Create platform package directories
-        run: npm exec -- napi create-npm-dirs
       - name: Download all native artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: binding-*
           path: node/artifacts
-      - name: Place artifacts into platform packages
-        run: npm run artifacts -- --output-dir artifacts
-      - name: Publish platform packages and root package
+      - name: Collect self-contained native binaries
+        shell: bash
+        run: |
+          BINARY_NAME="$(node -p "require('./package.json').napi.binaryName")"
+          find artifacts -type f -name '*.node' -exec cp '{}' . \;
+          EXPECTED_SUFFIXES=(
+            win32-x64-msvc
+            win32-arm64-msvc
+            darwin-x64
+            darwin-arm64
+            linux-x64-gnu
+            linux-arm64-gnu
+          )
+          for suffix in "${EXPECTED_SUFFIXES[@]}"; do
+            [[ -f "${BINARY_NAME}.${suffix}.node" ]] || {
+              echo "missing native artifact: ${BINARY_NAME}.${suffix}.node" >&2
+              exit 1
+            }
+          done
+          [[ "$(find . -maxdepth 1 -type f -name "${BINARY_NAME}.*.node" | wc -l)" -eq 6 ]]
+      - name: Verify self-contained tarball
+        shell: bash
+        run: |
+          npm pack --dry-run --ignore-scripts --json > pack.json
+          node <<'NODE'
+          const fs = require('node:fs')
+          const p = require('./package.json')
+          const suffixes = [
+            'win32-x64-msvc',
+            'win32-arm64-msvc',
+            'darwin-x64',
+            'darwin-arm64',
+            'linux-x64-gnu',
+            'linux-arm64-gnu',
+          ]
+          const expected = suffixes.map((suffix) => p.napi.binaryName + '.' + suffix + '.node').sort()
+          const files = JSON.parse(fs.readFileSync('pack.json', 'utf8'))[0].files.map((file) => file.path)
+          const actual = files.filter((file) => file.endsWith('.node')).sort()
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error('self-contained native set mismatch: ' + JSON.stringify(actual))
+          }
+          NODE
+      - name: Publish one self-contained product package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
@@ -142,9 +180,9 @@ jobs:
           if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
             echo "$PACKAGE@$VERSION is already published"
           else
-            npm publish --provenance --access public
+            npm publish --ignore-scripts --provenance --access public
           fi
-      - name: Verify registry identity, provenance, platform packages, and loading
+      - name: Verify registry identity, tarball, and loading
         env:
           SOURCE_COMMIT: ${{ inputs.commit }}
         shell: bash
@@ -162,12 +200,31 @@ jobs:
           [[ "$PUBLISHED_HEAD" == "$SOURCE_COMMIT" ]] || { echo "npm gitHead mismatch: $PUBLISHED_HEAD" >&2; exit 1; }
           [[ "$PREDICATE" == "https://slsa.dev/provenance/v1" ]] || { echo "npm provenance is missing" >&2; exit 1; }
 
-          npm view "$PACKAGE@$VERSION" optionalDependencies --json > optional-dependencies.json
-          node -e "const d=require('./optional-dependencies.json'); if(Object.keys(d).length!==6) process.exit(1)"
-          while IFS= read -r dependency; do
-            [[ "$(npm view "$dependency@$VERSION" version)" == "$VERSION" ]]
-            [[ "$(npm view "$dependency@$VERSION" dist.attestations.provenance.predicateType --json | tr -d '\"\r\n')" == "https://slsa.dev/provenance/v1" ]]
-          done < <(node -e "const d=require('./optional-dependencies.json'); console.log(Object.keys(d).join('\\n'))")
+          OPTIONAL="$(npm view "$PACKAGE@$VERSION" optionalDependencies --json 2>/dev/null || true)"
+          [[ -z "$OPTIONAL" || "$OPTIONAL" == "{}" || "$OPTIONAL" == "null" ]] || {
+            echo "self-contained package unexpectedly has optional dependencies: $OPTIONAL" >&2
+            exit 1
+          }
+
+          npm pack "$PACKAGE@$VERSION" --ignore-scripts --json > registry-pack.json
+          node <<'NODE'
+          const fs = require('node:fs')
+          const p = require('./package.json')
+          const suffixes = [
+            'win32-x64-msvc',
+            'win32-arm64-msvc',
+            'darwin-x64',
+            'darwin-arm64',
+            'linux-x64-gnu',
+            'linux-arm64-gnu',
+          ]
+          const expected = suffixes.map((suffix) => p.napi.binaryName + '.' + suffix + '.node').sort()
+          const files = JSON.parse(fs.readFileSync('registry-pack.json', 'utf8'))[0].files.map((file) => file.path)
+          const actual = files.filter((file) => file.endsWith('.node')).sort()
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error('published native set mismatch: ' + JSON.stringify(actual))
+          }
+          NODE
 
           mkdir smoke
           cd smoke

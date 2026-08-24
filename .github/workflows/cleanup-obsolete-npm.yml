@@ -1,0 +1,109 @@
+name: Cleanup obsolete npm platform packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact replacement release commit
+        required: true
+        type: string
+      replacement_version:
+        description: Verified self-contained replacement version
+        required: true
+        type: string
+      old_version:
+        description: Obsolete split-package version to remove
+        required: true
+        type: string
+
+concurrency:
+  group: cleanup-obsolete-npm-${{ inputs.old_version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify the self-contained replacement
+        env:
+          SOURCE_COMMIT: ${{ inputs.commit }}
+          REPLACEMENT_VERSION: ${{ inputs.replacement_version }}
+        shell: bash
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          PACKAGE="$(node -p "require('./package.json').name")"
+          LOCAL_VERSION="$(node -p "require('./package.json').version")"
+          [[ "$LOCAL_VERSION" == "$REPLACEMENT_VERSION" ]]
+          [[ "$(npm view "$PACKAGE@$REPLACEMENT_VERSION" gitHead --json | tr -d '\"\r\n')" == "$SOURCE_COMMIT" ]]
+          [[ "$(npm view "$PACKAGE@$REPLACEMENT_VERSION" dist.attestations.provenance.predicateType --json | tr -d '\"\r\n')" == "https://slsa.dev/provenance/v1" ]]
+          OPTIONAL="$(npm view "$PACKAGE@$REPLACEMENT_VERSION" optionalDependencies --json 2>/dev/null || true)"
+          [[ -z "$OPTIONAL" || "$OPTIONAL" == "{}" || "$OPTIONAL" == "null" ]]
+      - name: Remove obsolete root version and platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OLD_VERSION: ${{ inputs.old_version }}
+        shell: bash
+        run: |
+          [[ -n "${NODE_AUTH_TOKEN:-}" ]] || { echo "NPM_TOKEN is not configured" >&2; exit 1; }
+          PACKAGE="$(node -p "require('./package.json').name")"
+          if npm view "$PACKAGE@$OLD_VERSION" version >/dev/null 2>&1; then
+            npm unpublish "$PACKAGE@$OLD_VERSION" --force
+          fi
+          SUFFIXES=(
+            win32-x64-msvc
+            win32-arm64-msvc
+            darwin-x64
+            darwin-arm64
+            linux-x64-gnu
+            linux-arm64-gnu
+          )
+          for suffix in "${SUFFIXES[@]}"; do
+            PLATFORM_PACKAGE="${PACKAGE}-${suffix}"
+            if npm view "${PLATFORM_PACKAGE}@$OLD_VERSION" version >/dev/null 2>&1; then
+              npm unpublish "${PLATFORM_PACKAGE}@$OLD_VERSION" --force
+            fi
+          done
+      - name: Verify obsolete registry entries are gone
+        env:
+          REPLACEMENT_VERSION: ${{ inputs.replacement_version }}
+          OLD_VERSION: ${{ inputs.old_version }}
+        shell: bash
+        run: |
+          PACKAGE="$(node -p "require('./package.json').name")"
+          SUFFIXES=(
+            win32-x64-msvc
+            win32-arm64-msvc
+            darwin-x64
+            darwin-arm64
+            linux-x64-gnu
+            linux-arm64-gnu
+          )
+          for attempt in $(seq 1 12); do
+            REMAINING=0
+            npm view "$PACKAGE@$OLD_VERSION" version >/dev/null 2>&1 && REMAINING=1
+            for suffix in "${SUFFIXES[@]}"; do
+              npm view "${PACKAGE}-${suffix}@$OLD_VERSION" version >/dev/null 2>&1 && REMAINING=1
+            done
+            [[ "$REMAINING" -eq 0 ]] && break
+            sleep 5
+          done
+          [[ "$(npm view "$PACKAGE@$REPLACEMENT_VERSION" version)" == "$REPLACEMENT_VERSION" ]]
+          ! npm view "$PACKAGE@$OLD_VERSION" version >/dev/null 2>&1
+          for suffix in "${SUFFIXES[@]}"; do
+            ! npm view "${PACKAGE}-${suffix}@$OLD_VERSION" version >/dev/null 2>&1
+          done
