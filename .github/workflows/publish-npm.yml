@@ -206,7 +206,17 @@ jobs:
             exit 1
           }
 
-          npm pack "$PACKAGE@$VERSION" --ignore-scripts --json > registry-pack.json
+          # The registry serves from several caches. npm view can already report the
+          # new version while npm pack still resolves to a node that has not seen it,
+          # which failed this step on a publish that had in fact succeeded.
+          for attempt in $(seq 1 24); do
+            npm pack "$PACKAGE@$VERSION" --ignore-scripts --json > registry-pack.json 2>/dev/null && break
+            sleep 5
+          done
+          [[ -s registry-pack.json ]] || {
+            echo "registry tarball for $PACKAGE@$VERSION never became fetchable" >&2
+            exit 1
+          }
           node <<'NODE'
           const fs = require('node:fs')
           const p = require('./package.json')
@@ -229,6 +239,9 @@ jobs:
           mkdir smoke
           cd smoke
           npm init --yes >/dev/null
-          npm install "$PACKAGE@$VERSION" --ignore-scripts
+          for attempt in $(seq 1 24); do
+            npm install "$PACKAGE@$VERSION" --ignore-scripts && break
+            sleep 5
+          done
           node -e "require(process.argv[1])" "$PACKAGE"
           npx --yes bun@1.4.0 -e "require(process.argv[1])" "$PACKAGE"
