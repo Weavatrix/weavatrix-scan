@@ -1,0 +1,177 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact 40-character source commit to publish
+        required: true
+        type: string
+
+concurrency:
+  group: publish-npm-${{ inputs.commit }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate immutable source selection
+        env:
+          SOURCE_COMMIT: ${{ inputs.commit }}
+        shell: bash
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit must be a lowercase 40-character Git SHA" >&2
+            exit 1
+          }
+
+  build:
+    needs: validate
+    name: Build ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            extra: ""
+            test: true
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            extra: ""
+            test: true
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            extra: ""
+            test: true
+          - host: macos-latest
+            target: x86_64-apple-darwin
+            extra: ""
+            test: false
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            extra: --use-napi-cross
+            test: true
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            extra: --use-napi-cross
+            test: false
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.settings.target }}
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Build release binding
+        shell: bash
+        run: npm exec -- napi build --platform --release --target "${{ matrix.settings.target }}" ${{ matrix.settings.extra }}
+      - name: Test Node 24 binding
+        if: matrix.settings.test
+        run: npm test
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: matrix.settings.test
+        with:
+          bun-version: 1.4.0
+      - name: Test Bun 1.4 binding
+        if: matrix.settings.test
+        run: npm run test:bun
+      - name: Upload native artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: binding-${{ matrix.settings.target }}
+          path: node/*.node
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Install release tooling without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Create platform package directories
+        run: npm exec -- napi create-npm-dirs
+      - name: Download all native artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: binding-*
+          path: node/artifacts
+      - name: Place artifacts into platform packages
+        run: npm run artifacts -- --output-dir artifacts
+      - name: Publish platform packages and root package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          [[ -n "${NODE_AUTH_TOKEN:-}" ]] || { echo "NPM_TOKEN is not configured" >&2; exit 1; }
+          PACKAGE="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          npm config set provenance true
+          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE@$VERSION is already published"
+          else
+            npm publish --provenance --access public
+          fi
+      - name: Verify registry identity, provenance, platform packages, and loading
+        env:
+          SOURCE_COMMIT: ${{ inputs.commit }}
+        shell: bash
+        run: |
+          PACKAGE="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          PUBLISHED_HEAD=""
+          PREDICATE=""
+          for attempt in $(seq 1 24); do
+            PUBLISHED_HEAD="$(npm view "$PACKAGE@$VERSION" gitHead --json 2>/dev/null | tr -d '\"\r\n' || true)"
+            PREDICATE="$(npm view "$PACKAGE@$VERSION" dist.attestations.provenance.predicateType --json 2>/dev/null | tr -d '\"\r\n' || true)"
+            [[ "$PUBLISHED_HEAD" == "$SOURCE_COMMIT" && "$PREDICATE" == "https://slsa.dev/provenance/v1" ]] && break
+            sleep 5
+          done
+          [[ "$PUBLISHED_HEAD" == "$SOURCE_COMMIT" ]] || { echo "npm gitHead mismatch: $PUBLISHED_HEAD" >&2; exit 1; }
+          [[ "$PREDICATE" == "https://slsa.dev/provenance/v1" ]] || { echo "npm provenance is missing" >&2; exit 1; }
+
+          npm view "$PACKAGE@$VERSION" optionalDependencies --json > optional-dependencies.json
+          node -e "const d=require('./optional-dependencies.json'); if(Object.keys(d).length!==6) process.exit(1)"
+          while IFS= read -r dependency; do
+            [[ "$(npm view "$dependency@$VERSION" version)" == "$VERSION" ]]
+            [[ "$(npm view "$dependency@$VERSION" dist.attestations.provenance.predicateType --json | tr -d '\"\r\n')" == "https://slsa.dev/provenance/v1" ]]
+          done < <(node -e "const d=require('./optional-dependencies.json'); console.log(Object.keys(d).join('\\n'))")
+
+          mkdir smoke
+          cd smoke
+          npm init --yes >/dev/null
+          npm install "$PACKAGE@$VERSION" --ignore-scripts
+          node -e "require(process.argv[1])" "$PACKAGE"
+          npx --yes bun@1.4.0 -e "require(process.argv[1])" "$PACKAGE"

@@ -213,7 +213,10 @@ const report = await scanRepository(process.cwd(), {
 One package supports Node.js 18+ and Bun 1.4+ with native targets for Windows,
 macOS, and glibc Linux on x64 and arm64. The
 [Node/Bun benchmark report](node/benchmark/RESULTS.md) publishes both the raw
-walker loss and the equal path-plus-size scanner result.
+walker loss and the equal path-plus-size scanner result: `fdir` won the
+paths-only rows by 1.68x-1.82x, while Weavatrix won the path-plus-size rows by
+8.11x-11.57x on the disclosed 20k-file fixture. This npm library is a
+separately released Scan product; it does not belong to Online or MCP.
 
 ## Rust quick start
 
