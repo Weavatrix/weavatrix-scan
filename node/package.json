@@ -1,6 +1,6 @@
 {
   "name": "weavatrix-scan",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Deterministic, safe Rust repository scanner for Node.js and Bun",
   "license": "MIT",
   "author": "Sergii Ziborov <sergii.ziborov@gmail.com>",
