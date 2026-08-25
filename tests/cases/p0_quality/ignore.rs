@@ -132,6 +132,15 @@ fn ignore_policy_constructors_and_default_matcher_are_usable() {
     assert!(compatible.parent_rules);
     assert!(compatible.git_exclude);
     assert!(compatible.git_global);
+    let none = IgnorePolicy::none();
+    assert!(!none.git_ignore);
+    assert!(!none.dot_ignore);
+    assert!(!none.custom_ignore);
+    assert!(!none.git_exclude);
+    assert!(!none.git_global);
+    assert!(none.explicit_files.is_empty());
+    let options = ScanOptions::default().with_standard_skips(StandardSkips::Disabled);
+    assert_eq!(options.standard_skips, StandardSkips::Disabled);
 
     let mut matcher = RepositoryMatcher::new(&fixture.root).unwrap();
     assert!(!matcher.is_ignored("source.rs", false).unwrap());

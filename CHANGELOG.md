@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Add `IgnorePolicy::none()` so consumers can disable every ignore source.
+- Add `ScanOptions::with_standard_skips` to make the skip-list contract explicit.
+
 ## 0.4.6 - 2026-07-30
 
 - split selection, ignore, traversal, scheduling, content delivery, reporting,

@@ -40,6 +40,24 @@ impl IgnorePolicy {
         }
     }
 
+    /// Disable every ignore source, including repository `.gitignore` files.
+    ///
+    /// Use this when a consumer must see generated directories that a
+    /// repository-local ignore list would otherwise hide.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            parent_rules: false,
+            git_ignore: false,
+            dot_ignore: false,
+            custom_ignore: false,
+            git_exclude: false,
+            git_global: false,
+            require_git: false,
+            explicit_files: Vec::new(),
+        }
+    }
+
     #[must_use]
     pub const fn git_compatible() -> Self {
         Self {
@@ -100,5 +118,22 @@ impl IgnorePolicy {
     pub fn with_explicit_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.explicit_files.push(path.into());
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn none_disables_every_ignore_source() {
+        let policy = IgnorePolicy::none();
+        assert!(!policy.parent_rules);
+        assert!(!policy.git_ignore);
+        assert!(!policy.dot_ignore);
+        assert!(!policy.custom_ignore);
+        assert!(!policy.git_exclude);
+        assert!(!policy.git_global);
+        assert!(policy.explicit_files.is_empty());
     }
 }

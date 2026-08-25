@@ -73,6 +73,13 @@ impl ScanOptions {
         self
     }
 
+    /// Enable or disable the built-in generated-directory skip list.
+    #[must_use]
+    pub const fn with_standard_skips(mut self, standard_skips: StandardSkips) -> Self {
+        self.standard_skips = standard_skips;
+        self
+    }
+
     /// Disables file-content reads for the fastest metadata-only discovery.
     ///
     /// The resulting report does not contain content hashes and may include
