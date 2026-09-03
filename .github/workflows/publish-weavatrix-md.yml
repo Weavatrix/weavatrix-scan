@@ -28,6 +28,9 @@ jobs:
   npm:
     name: npm
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -50,4 +53,5 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if (-not $env:NODE_AUTH_TOKEN) { throw "NPM_TOKEN missing" }
-          npm publish --access public --ignore-scripts
+          npm config set provenance true
+          npm publish --access public --ignore-scripts --provenance
