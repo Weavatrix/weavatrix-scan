@@ -5,7 +5,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
-const { scanRepository, scanRepositorySync } = require('../lib/index.js')
+const { scanDiagnostics, scanRepository, scanRepositorySync, ScanSession } = require('../lib/index.js')
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'weavatrix-scan-node-'))
@@ -30,4 +30,22 @@ test('metadata-only sync scan avoids content hashes', (t) => {
   assert.equal(report.files.length, 2)
   assert.equal(report.files.every((file) => file.content_hash == null), true)
   assert.equal(report.skipped.length, 0)
+})
+
+test('session pages files and abort stops a scan', async (t) => {
+  const root = fixture(t)
+  const session = new ScanSession(root, { extensions: ['js', 'rs'], selectedFilesOnly: true })
+  const pages = []
+  for await (const batch of session.files({ batchSize: 1 })) {
+    pages.push(batch)
+  }
+  assert.equal(pages.length, 2)
+  const diagnostics = scanDiagnostics()
+  assert.equal(diagnostics.muslSupported, false)
+  assert.ok(diagnostics.packageVersion)
+  const controller = new AbortController()
+  controller.abort()
+  const cancelled = await scanRepository(root, { signal: controller.signal })
+  assert.equal(cancelled.complete, false)
+  assert.equal(cancelled.termination, 'Cancelled')
 })

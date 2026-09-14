@@ -68,6 +68,22 @@ try {
     .files.map((file) => ({ relative: file.relative, bytes: file.bytes }))
   const competitor = () => fdirPaths()
     .map((relative) => ({ relative, bytes: fs.statSync(path.join(root, relative)).size }))
+  const competitorAsync = async () => {
+    const paths = fdirPaths()
+    const workers = Math.min(8, os.availableParallelism?.() || 8)
+    const sized = new Array(paths.length)
+    let next = 0
+    await Promise.all(Array.from({ length: workers }, async () => {
+      while (next < paths.length) {
+        const index = next
+        next += 1
+        const relative = paths[index]
+        const bytes = (await fs.promises.stat(path.join(root, relative))).size
+        sized[index] = { relative, bytes }
+      }
+    }))
+    return sized
+  }
   if (JSON.stringify(oursPaths()) !== JSON.stringify(fdirPaths())) {
     throw new Error('exact relative-path parity failed')
   }
@@ -77,12 +93,24 @@ try {
     throw new Error('exact path-and-size parity failed')
   }
 
+  async function runAsyncOnce(run) {
+    const started = performance.now()
+    const result = await run()
+    const elapsed = performance.now() - started
+    if (result.length !== files) throw new Error(`parity failure: ${result.length} != ${files}`)
+    return elapsed
+  }
   const [weavatrixPathsMs, fdirPathsMs] = measurePair(oursPaths, fdirPaths)
   const [weavatrixMs, fdirMs] = measurePair(ours, competitor)
+  const asyncSamples = []
+  for (let round = 0; round < rounds; round += 1) {
+    asyncSamples.push(await runAsyncOnce(competitorAsync))
+  }
   console.log(JSON.stringify({
     files,
     rounds,
     runtime: process.versions.bun ? `bun ${process.versions.bun}` : `node ${process.version}`,
+    note: 'statSync row is historical-shaped; asyncStat is bounded parallel fs.promises.stat. Neither is a content workload.',
     results: [
       {
         contract: 'sorted relative paths; Weavatrix still performs its scanner metadata work',
@@ -95,6 +123,10 @@ try {
         weavatrixMs,
         fdirMs,
         ratio: fdirMs / weavatrixMs,
+      },
+      {
+        contract: 'fdir paths plus bounded parallel async stat',
+        fdirAsyncStatMs: median(asyncSamples),
       },
     ],
   }, null, 2))

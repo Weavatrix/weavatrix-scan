@@ -249,11 +249,29 @@ mod tests {
             hash_bytes(b"abc"),
             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+        assert_eq!(
+            hash_bytes(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "sha256:248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+        let padding_boundary = [0x61_u8; 55];
+        let mut boundary = FingerprintHasher::new();
+        boundary.write(&padding_boundary[..32]);
+        boundary.write(&padding_boundary[32..]);
+        assert_eq!(boundary.finish(), hash_bytes(&padding_boundary));
         let mut streamed = FingerprintHasher::new();
         streamed.write(b"a");
         streamed.write(b"b");
         streamed.write(b"c");
         assert_eq!(streamed.finish(), hash_bytes(b"abc"));
+
+        let large = vec![0x5a_u8; 10_000];
+        let mut chunked = FingerprintHasher::new();
+        for piece in large.chunks(17) {
+            chunked.write(piece);
+        }
+        assert_eq!(chunked.finish(), hash_bytes(&large));
+        let binary = [0_u8, 1, 255, 128, 7, 0, 64];
+        assert_eq!(hash_bytes(&binary), hash_bytes(&binary));
     }
 
     #[test]

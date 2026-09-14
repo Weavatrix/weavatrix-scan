@@ -78,8 +78,11 @@ impl ScanCache {
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
         let before = self.entries.len();
-        self.entries
-            .retain(|entry| !paths.contains(entry.relative.as_str()));
+        self.entries.retain(|entry| {
+            !paths
+                .iter()
+                .any(|prefix| crate::path::is_same_or_descendant(&entry.relative, prefix))
+        });
         before - self.entries.len()
     }
 

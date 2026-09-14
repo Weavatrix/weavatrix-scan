@@ -16,11 +16,13 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 mod batch;
+mod bounded;
 mod inspect;
 mod support;
 mod visit;
 
 pub(crate) use batch::inspect_files;
+pub(crate) use bounded::{BoundedReadLimits, BoundedReadStatus, ReadControl, read_bounded};
 use support::{
     InspectionStop, apply_cached, record_binary_skip, record_concurrent_modification,
     record_io_error, record_limit_skip, reusable_candidate,

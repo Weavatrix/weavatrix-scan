@@ -2,7 +2,6 @@ use super::entry::{process_entry_with, record_walk_error, walker_error_into_scan
 use crate::config::{EvidenceMode, ScanOptions};
 use crate::content::inspect_files;
 use crate::error::{Error, Result};
-use crate::hash::FingerprintHasher;
 use crate::ignore::RepositoryMatcher;
 use crate::parallel::dynamic;
 use crate::report::{

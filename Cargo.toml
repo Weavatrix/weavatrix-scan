@@ -1,6 +1,6 @@
 [package]
 name = "weavatrix-scan"
-version = "0.4.7"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Deterministic, safe repository scanner for code intelligence"
@@ -25,8 +25,8 @@ winapi-util = "0.1.11"
 
 [dev-dependencies]
 dirwalk = "1.1.1"
-ignore = "0.4.31"
-jwalk = "0.8.1"
+ignore = "0.4.33"
+jwalk = "0.9.0"
 serde_json = "1.0.151"
 walkdir = "2.5.0"
 
@@ -58,6 +58,10 @@ harness = false
 
 [[bench]]
 name = "scale_large"
+harness = false
+
+[[bench]]
+name = "incremental_update"
 harness = false
 
 [lints.rust]

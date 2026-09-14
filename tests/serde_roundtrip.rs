@@ -20,6 +20,7 @@ fn scan_report_round_trips_through_json() {
     let mut legacy = serde_json::to_value(&report).unwrap();
     let legacy_object = legacy.as_object_mut().unwrap();
     legacy_object.remove("complete");
+    legacy_object.remove("descriptor");
     legacy_object.remove("ignore_sources");
     legacy_object.remove("termination");
     legacy_object.remove("portable");

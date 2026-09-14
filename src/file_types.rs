@@ -1,5 +1,6 @@
 use crate::default_file_types::DEFAULT_FILE_TYPES;
 use crate::glob;
+use crate::hash::FingerprintHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -176,6 +177,40 @@ impl NamedFileTypes {
     /// Iterates over definition names in deterministic lexical order.
     pub fn names(&self) -> impl ExactSizeIterator<Item = &str> + DoubleEndedIterator {
         self.definitions.keys().map(String::as_str)
+    }
+
+    pub(crate) fn write_policy(&self, hasher: &mut FingerprintHasher) {
+        for (name, patterns) in &self.definitions {
+            hasher.write(name.as_bytes());
+            hasher.write(&[0]);
+            for pattern in patterns {
+                match pattern {
+                    FileTypePattern::Extension(value) => {
+                        hasher.write(&[1]);
+                        hasher.write(value.as_bytes());
+                    }
+                    FileTypePattern::Glob(value) => {
+                        hasher.write(&[2]);
+                        hasher.write(value.as_bytes());
+                    }
+                }
+                hasher.write(&[0]);
+            }
+            hasher.write(&[0xfe]);
+        }
+        for selection in &self.selections {
+            match selection {
+                FileTypeSelection::Include(name) => {
+                    hasher.write(&[1]);
+                    hasher.write(name.as_bytes());
+                }
+                FileTypeSelection::Exclude(name) => {
+                    hasher.write(&[2]);
+                    hasher.write(name.as_bytes());
+                }
+            }
+            hasher.write(&[0xff]);
+        }
     }
 
     pub(crate) fn has_includes(&self) -> bool {

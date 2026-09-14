@@ -47,7 +47,7 @@ pub(crate) fn scan_repository_with_runtime(
         report.complete = false;
         report.warnings.extend(inspected.warnings);
     }
-    finalize_report(&mut report);
+    finalize_report(&mut report, options);
     Ok(report)
 }
 

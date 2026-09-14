@@ -1,4 +1,5 @@
 use crate::config::{ContentValidationPolicy, ScanOptions};
+use crate::content::bounded::{BoundedReadLimits, ReadControl};
 use crate::content_visit::{
     ContentFile, ContentFileStatus, ContentVisitControl, ContentVisitEvent,
 };
@@ -6,10 +7,25 @@ use crate::file_version::{reusable, snapshot};
 use crate::hash::{ContentFingerprint, FingerprintHasher};
 use crate::report::ScannedFile;
 use std::fs::File;
-use std::io::{self, Read as _};
+use std::io;
 use std::path::Path;
+use std::time::Instant;
 
 use super::ContentWorkerContext;
+
+fn read_control(options: &ScanOptions, started: Instant) -> ReadControl<'_> {
+    ReadControl {
+        cancellation: options.cancellation.as_ref(),
+        deadline: options.limits.timeout.map(|timeout| started + timeout),
+    }
+}
+
+fn read_limits(expected_bytes: u64, options: &ScanOptions) -> BoundedReadLimits {
+    BoundedReadLimits {
+        expected_bytes,
+        max_content_bytes: options.max_file_bytes,
+    }
+}
 
 mod file;
 mod support;

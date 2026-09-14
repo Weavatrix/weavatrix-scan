@@ -47,6 +47,7 @@ where
             compact,
             options,
             context,
+            started,
             buffer,
             visitor,
             &mut visited,
@@ -63,6 +64,7 @@ fn visit_file<V>(
     mut compact: CompactScannedFile,
     options: &ScanOptions,
     context: ContentWorkerContext<'_>,
+    started: Instant,
     buffer: &mut [u8],
     visitor: &mut V,
     visited: &mut VisitedFiles,
@@ -85,7 +87,15 @@ where
         binary_checked: false,
     };
     visited.evidence.cache.content_reads = visited.evidence.cache.content_reads.saturating_add(1);
-    match inspect::inspect_with_visitor(&mut scanned, options, context, sequence, buffer, visitor) {
+    match inspect::inspect_with_visitor(
+        &mut scanned,
+        options,
+        context,
+        sequence,
+        started,
+        buffer,
+        visitor,
+    ) {
         Ok(result) => record_visit_result(visited, scanned, &result, options, context, sequence),
         Err(source) => {
             record_io_error(

@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::support::{cancel, content_file, emit_end};
 use super::*;
 
@@ -48,6 +50,7 @@ pub(crate) fn inspect_with_visitor<V>(
     options: &ScanOptions,
     context: ContentWorkerContext<'_>,
     sequence: u64,
+    started: Instant,
     buffer: &mut [u8],
     visitor: &mut V,
 ) -> io::Result<VisitedInspection>
@@ -82,6 +85,7 @@ where
         options,
         context,
         sequence,
+        started,
         buffer,
         visitor,
         &mut progress,
@@ -112,6 +116,7 @@ fn read_chunks<V>(
     options: &ScanOptions,
     context: ContentWorkerContext<'_>,
     sequence: u64,
+    started: Instant,
     buffer: &mut [u8],
     visitor: &mut V,
     progress: &mut VisitProgress,
@@ -119,52 +124,65 @@ fn read_chunks<V>(
 where
     V: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl,
 {
-    while !progress.consumer_skipped || progress.hasher.is_some() || options.detect_binary_files {
-        if options
-            .cancellation
-            .as_ref()
-            .is_some_and(crate::control::CancellationToken::is_cancelled)
-        {
-            return Ok(Some(false));
-        }
-        let read = file.read(buffer)?;
-        if read == 0 {
-            progress.reached_eof = true;
-            break;
-        }
-        let offset = progress.bytes_read;
-        progress.bytes_read = progress.bytes_read.saturating_add(read as u64);
-        let bytes = &buffer[..read];
-        if options.detect_binary_files && bytes.contains(&0) {
-            progress.binary = true;
-            break;
-        }
-        if let Some(hasher) = progress.hasher.as_mut() {
-            hasher.write(bytes);
-        }
-        if let Some(fingerprint) = progress.fingerprint.as_mut() {
-            fingerprint.write(bytes);
-        }
-        if progress.consumer_skipped {
-            continue;
-        }
-        progress.chunks = progress.chunks.saturating_add(1);
-        progress.bytes_emitted = progress.bytes_emitted.saturating_add(read as u64);
-        match visitor(ContentVisitEvent::Chunk {
-            worker_index: context.worker_index,
-            file: content_file(context.root, context.root_index, scanned, sequence),
-            offset,
-            bytes,
-        }) {
-            ContentVisitControl::Continue => {}
-            ContentVisitControl::SkipFile => progress.consumer_skipped = true,
-            ContentVisitControl::Quit => {
-                cancel(options);
-                return Ok(Some(true));
-            }
-        }
+    if progress.consumer_skipped && progress.hasher.is_none() && !options.detect_binary_files {
+        return Ok(None);
     }
-    Ok(None)
+    let mut visitor_quit = false;
+    let (_, status) = crate::content::bounded::read_bounded(
+        file,
+        buffer,
+        super::read_limits(scanned.bytes, options),
+        super::read_control(options, started),
+        |bytes| {
+            let offset = progress.bytes_read;
+            progress.bytes_read = progress.bytes_read.saturating_add(bytes.len() as u64);
+            if options.detect_binary_files && bytes.contains(&0) {
+                progress.binary = true;
+                return Ok(false);
+            }
+            if let Some(hasher) = progress.hasher.as_mut() {
+                hasher.write(bytes);
+            }
+            if let Some(fingerprint) = progress.fingerprint.as_mut() {
+                fingerprint.write(bytes);
+            }
+            if progress.consumer_skipped {
+                return Ok(progress.hasher.is_some() || options.detect_binary_files);
+            }
+            progress.chunks = progress.chunks.saturating_add(1);
+            progress.bytes_emitted = progress.bytes_emitted.saturating_add(bytes.len() as u64);
+            match visitor(ContentVisitEvent::Chunk {
+                worker_index: context.worker_index,
+                file: content_file(context.root, context.root_index, scanned, sequence),
+                offset,
+                bytes,
+            }) {
+                ContentVisitControl::Continue => Ok(true),
+                ContentVisitControl::SkipFile => {
+                    progress.consumer_skipped = true;
+                    Ok(progress.hasher.is_some() || options.detect_binary_files)
+                }
+                ContentVisitControl::Quit => {
+                    cancel(options);
+                    visitor_quit = true;
+                    Ok(false)
+                }
+            }
+        },
+    )?;
+    match status {
+        crate::content::bounded::BoundedReadStatus::Complete => {
+            progress.reached_eof = true;
+            Ok(if visitor_quit { Some(true) } else { None })
+        }
+        crate::content::bounded::BoundedReadStatus::Stopped
+        | crate::content::bounded::BoundedReadStatus::Grown => {
+            progress.reached_eof = false;
+            Ok(if visitor_quit { Some(true) } else { None })
+        }
+        crate::content::bounded::BoundedReadStatus::Cancelled
+        | crate::content::bounded::BoundedReadStatus::Deadline => Ok(Some(visitor_quit)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

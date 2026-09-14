@@ -17,6 +17,7 @@ impl ScanReport {
             warnings: Vec::new(),
             ignore_sources: Vec::new(),
             revision: String::new(),
+            descriptor: crate::ScanDescriptor::default(),
             complete: true,
             termination: None,
             portable: true,

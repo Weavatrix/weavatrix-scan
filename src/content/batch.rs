@@ -109,7 +109,8 @@ fn inspect_chunk(
             }
             inspected.cache.content_reads = inspected.cache.content_reads.saturating_add(1);
             inspected.cache.fingerprint_reads = inspected.cache.fingerprint_reads.saturating_add(1);
-            match inspect::validate_cached(&mut file, &cached.content_fingerprint) {
+            match inspect::validate_cached(&mut file, &cached.content_fingerprint, options, started)
+            {
                 Ok(inspect::CachedValidation::Match) => {
                     apply_cached(&mut file, cached);
                     inspected.cache.reused_hashes = inspected.cache.reused_hashes.saturating_add(1);
@@ -135,7 +136,7 @@ fn inspect_chunk(
         }
         inspected.cache.content_reads = inspected.cache.content_reads.saturating_add(1);
         let error_file = file.clone();
-        match inspect::inspect(file, options) {
+        match inspect::inspect(file, options, started) {
             Ok(Inspection::Selected(file)) => inspected.files.push(file),
             Ok(Inspection::Binary(relative)) => {
                 record_binary_skip(&mut inspected, relative, options);

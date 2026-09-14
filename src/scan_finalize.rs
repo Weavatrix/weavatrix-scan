@@ -1,13 +1,18 @@
+use crate::config::ScanOptions;
 use crate::hash::FingerprintHasher;
-use crate::report::{ScanReport, ScannedFile};
+use crate::report::{IgnoreSourceEvidence, ScanReport, ScannedFile};
+use crate::scan_identity::{
+    ScanDescriptor, write_ignore_kind, write_selected_file, write_termination,
+};
 
-pub(crate) fn finalize_report(report: &mut ScanReport) {
+pub(crate) fn finalize_report(report: &mut ScanReport, options: &ScanOptions) {
     sort_report_evidence(report);
-    let mut revision = RevisionBuilder::new(report);
+    report.descriptor = ScanDescriptor::from_options(options);
+    let mut revision = RevisionBuilder::new(&report.ignore_sources);
     for file in &report.files {
         revision.push(file);
     }
-    report.revision = revision.finish(report);
+    report.revision = revision.finish(report.portable, report.termination);
     report.finish_recording();
 }
 
@@ -40,10 +45,11 @@ pub(crate) struct RevisionBuilder {
 }
 
 impl RevisionBuilder {
-    pub(crate) fn new(report: &ScanReport) -> Self {
+    pub(crate) fn new(sources: &[IgnoreSourceEvidence]) -> Self {
         let mut revision = FingerprintHasher::new();
-        for source in &report.ignore_sources {
-            revision.write(format!("{:?}", source.kind).as_bytes());
+        revision.write(b"scan-revision\x01");
+        for source in sources {
+            write_ignore_kind(&mut revision, source.kind);
             revision.write(&[0]);
             revision.write(source.location.as_bytes());
             revision.write(&[0]);
@@ -54,17 +60,21 @@ impl RevisionBuilder {
     }
 
     pub(crate) fn push(&mut self, file: &ScannedFile) {
-        self.revision.write(file.relative.as_bytes());
-        self.revision.write(&[0]);
-        self.revision
-            .write(file.content_hash.as_deref().unwrap_or("").as_bytes());
-        self.revision.write(&[0xff]);
+        self.push_entry(&file.relative, file.bytes, file.content_hash.as_deref());
     }
 
-    pub(crate) fn finish(mut self, report: &ScanReport) -> String {
-        self.revision.write(&[u8::from(report.portable)]);
-        if let Some(termination) = report.termination {
-            self.revision.write(format!("{termination:?}").as_bytes());
+    pub(crate) fn push_entry(&mut self, relative: &str, bytes: u64, content_hash: Option<&str>) {
+        write_selected_file(&mut self.revision, relative, bytes, content_hash);
+    }
+
+    pub(crate) fn finish(
+        mut self,
+        portable: bool,
+        termination: Option<crate::report::ScanTermination>,
+    ) -> String {
+        self.revision.write(&[u8::from(portable)]);
+        if let Some(termination) = termination {
+            write_termination(&mut self.revision, termination);
         }
         self.revision.finish()
     }

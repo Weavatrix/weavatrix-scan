@@ -48,6 +48,34 @@ impl WatchPlan {
     pub fn invalidated(&self) -> impl Iterator<Item = &str> {
         self.changed.iter().chain(&self.removed).map(String::as_str)
     }
+
+    /// Returns whether `relative` is an exact invalidated path or a descendant
+    /// of one, using `/` component boundaries.
+    #[must_use]
+    pub fn invalidates_path(&self, relative: &str) -> bool {
+        self.invalidated()
+            .any(|prefix| crate::path::is_same_or_descendant(relative, prefix))
+    }
+
+    /// Expands prefix removals against a known selected-path set.
+    #[must_use]
+    pub fn expand_removed<'a, I>(&self, known: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let mut expanded = known
+            .into_iter()
+            .filter(|path| {
+                self.removed
+                    .iter()
+                    .any(|prefix| crate::path::is_same_or_descendant(path, prefix))
+            })
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        expanded.sort_unstable();
+        expanded.dedup();
+        expanded
+    }
 }
 
 /// Converts watcher-specific path notifications into scanner cache work.
@@ -103,6 +131,11 @@ impl WatcherEventAdapter {
     }
 
     /// Coalesces raw watcher events into a stable scanner invalidation plan.
+    ///
+    /// `RenameFrom` is never classified from current filesystem metadata of a
+    /// vanished path. Apply the plan with prefix-aware invalidation so an
+    /// outgoing directory rename drops the confirmed subtree. An unpaired
+    /// destination outside the root is counted as a rejected event.
     #[must_use]
     pub fn plan<I>(&self, events: I) -> WatchPlan
     where

@@ -75,10 +75,11 @@ impl Scanner {
 
     /// Applies a watcher plan without traversing unchanged directories.
     ///
-    /// Safe file-only plans re-match and inspect only changed paths, remove
-    /// deleted paths, merge unchanged manifest evidence, and recompute the
-    /// revision. Plans that can affect selection or directory structure fall
-    /// back to a complete scan.
+    /// Safe file-only plans re-match and inspect only changed paths, drop
+    /// deleted paths and their confirmed descendants, merge unchanged
+    /// manifest evidence, and recompute the revision. A policy/descriptor
+    /// mismatch, ignore-source change, structural event, or unsafe path
+    /// falls back to a complete scan.
     ///
     /// # Errors
     ///

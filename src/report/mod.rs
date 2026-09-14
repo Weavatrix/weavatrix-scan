@@ -162,6 +162,9 @@ pub struct ScanReport {
     #[cfg_attr(feature = "serde", serde(default))]
     pub ignore_sources: Vec<IgnoreSourceEvidence>,
     pub revision: String,
+    /// Versioned selection and content-policy identity for incremental reuse.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub descriptor: crate::ScanDescriptor,
     /// False when local I/O or ignore-rule errors made evidence partial.
     #[cfg_attr(feature = "serde", serde(default = "default_complete"))]
     pub complete: bool,
@@ -194,6 +197,8 @@ pub struct CompactScanReport {
     #[cfg_attr(feature = "serde", serde(default))]
     pub ignore_sources: Vec<IgnoreSourceEvidence>,
     pub revision: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub descriptor: crate::ScanDescriptor,
     #[cfg_attr(feature = "serde", serde(default = "default_complete"))]
     pub complete: bool,
     #[cfg_attr(feature = "serde", serde(default))]

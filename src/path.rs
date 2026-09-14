@@ -3,6 +3,17 @@ use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Component, Path};
 
+/// Returns whether `path` is `prefix` or a descendant, using `/` component
+/// boundaries. `src` matches `src/a.rs` and does not match `src2`.
+#[must_use]
+pub fn is_same_or_descendant(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || (!prefix.is_empty()
+            && path.len() > prefix.len()
+            && path.as_bytes().get(prefix.len()) == Some(&b'/')
+            && path.starts_with(prefix))
+}
+
 pub(crate) fn normalized_relative_path(path: &Path) -> String {
     if path.is_relative()
         && path
@@ -140,5 +151,13 @@ mod tests {
             super::normalized_relative_path(Path::new("src").join("100%").join("lib.rs").as_path(),),
             "src/100%25/lib.rs"
         );
+    }
+
+    #[test]
+    fn descendant_check_uses_component_boundaries() {
+        assert!(super::is_same_or_descendant("src", "src"));
+        assert!(super::is_same_or_descendant("src/nested/a.rs", "src"));
+        assert!(!super::is_same_or_descendant("src2", "src"));
+        assert!(!super::is_same_or_descendant("src", "src/nested"));
     }
 }

@@ -13,7 +13,6 @@ use crate::scan_limits::apply_total_bytes_limit;
 use crate::scan_match::skip_match;
 use crate::walk_types::{WalkError, WalkOperation};
 use crate::watch::WatchPlan;
-use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Component, Path};
@@ -37,6 +36,7 @@ pub(super) fn scan_watch_plan(
         || !previous.complete
         || previous.termination.is_some()
         || options.limits.max_entries.is_some()
+        || !previous.descriptor.matches(options)
     {
         return scan_repository_with_runtime(
             root,
@@ -81,11 +81,7 @@ pub(super) fn scan_watch_plan(
             }
         }
     }
-    if matcher
-        .sources()
-        .iter()
-        .any(|source| !previous.ignore_sources.contains(source))
-    {
+    if ignore_sources_changed(matcher.sources(), &previous.ignore_sources) {
         return scan_repository_with_runtime(
             root,
             options,
@@ -111,24 +107,33 @@ pub(super) fn scan_watch_plan(
         }
     }
     apply_total_bytes_limit(&mut report, options);
-    finalize_report(&mut report);
+    finalize_report(&mut report, options);
     Ok(report)
 }
 
+fn ignore_sources_changed(
+    current: &[crate::report::IgnoreSourceEvidence],
+    previous: &[crate::report::IgnoreSourceEvidence],
+) -> bool {
+    current.len() != previous.len()
+        || current
+            .iter()
+            .any(|source| !previous.iter().any(|known| known == source))
+}
+
 fn prepare_incremental_report(previous: &ScanReport, plan: &WatchPlan) -> ScanReport {
-    let invalidated = plan.invalidated().collect::<HashSet<_>>();
     let mut report = previous.clone();
     report
         .files
-        .retain(|file| !invalidated.contains(file.relative.as_str()));
+        .retain(|file| !plan.invalidates_path(&file.relative));
     report
         .skipped
-        .retain(|entry| !invalidated.contains(entry.relative.as_str()));
+        .retain(|entry| !plan.invalidates_path(&entry.relative));
     report.warnings.retain(|warning| {
         warning
             .relative
             .as_deref()
-            .is_none_or(|relative| !invalidated.contains(relative))
+            .is_none_or(|relative| !plan.invalidates_path(relative))
     });
     report.revision.clear();
     report.complete = true;

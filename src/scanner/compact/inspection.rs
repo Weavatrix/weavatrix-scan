@@ -1,6 +1,6 @@
 use super::{
-    CompactContentEvidence, CompactScannedFile, EvidenceMode, FingerprintHasher, Path, Result,
-    ScanOptions, ScanReport, ScannedFile, SkipKind, SkippedEntry, inspect_files,
+    CompactContentEvidence, CompactScannedFile, EvidenceMode, Path, Result, ScanOptions,
+    ScanReport, ScannedFile, SkipKind, SkippedEntry, inspect_files,
 };
 use crate::report::{FileVersion, ScanTermination};
 
@@ -162,24 +162,9 @@ pub(crate) fn sort_evidence(report: &mut ScanReport) {
 }
 
 pub(crate) fn compact_revision(evidence: &ScanReport, files: &[CompactScannedFile]) -> String {
-    let mut revision = FingerprintHasher::new();
-    for source in &evidence.ignore_sources {
-        revision.write(format!("{:?}", source.kind).as_bytes());
-        revision.write(&[0]);
-        revision.write(source.location.as_bytes());
-        revision.write(&[0]);
-        revision.write(source.content_hash.as_bytes());
-        revision.write(&[0xfe]);
-    }
+    let mut revision = crate::scan_finalize::RevisionBuilder::new(&evidence.ignore_sources);
     for file in files {
-        revision.write(file.relative.as_bytes());
-        revision.write(&[0]);
-        revision.write(file.content_hash().unwrap_or("").as_bytes());
-        revision.write(&[0xff]);
+        revision.push_entry(&file.relative, file.bytes, file.content_hash());
     }
-    revision.write(&[u8::from(evidence.portable)]);
-    if let Some(termination) = evidence.termination {
-        revision.write(format!("{termination:?}").as_bytes());
-    }
-    revision.finish()
+    revision.finish(evidence.portable, evidence.termination)
 }

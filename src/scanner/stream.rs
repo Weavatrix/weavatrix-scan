@@ -23,7 +23,7 @@ impl Scanner {
             discover_repository_with_options(&self.root, &self.options, &self.runtime)?;
         sort_report_evidence(&mut report);
         let files = std::mem::take(&mut report.files);
-        let mut revision = RevisionBuilder::new(&report);
+        let mut revision = RevisionBuilder::new(&report.ignore_sources);
         let mut selected = 0_u64;
         let mut emitted = 0_u64;
         let mut stopped = false;
@@ -64,7 +64,8 @@ impl Scanner {
             }
         }
         sort_report_evidence(&mut report);
-        report.revision = revision.finish(&report);
+        report.descriptor = crate::ScanDescriptor::from_options(&self.options);
+        report.revision = revision.finish(report.portable, report.termination);
         report.finish_recording();
         Ok(ScanStreamReport {
             root: report.root,

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use weavatrix_scan::{ScanOptions, ScanReport, Scanner, WatchPlan};
 
 pub struct Fixture {
     pub root: PathBuf,
@@ -30,6 +31,59 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[allow(dead_code)]
+pub fn relatives(report: &ScanReport) -> Vec<&str> {
+    report
+        .files
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn watch_matches(
+    fixture: &Fixture,
+    options: &ScanOptions,
+    previous: &ScanReport,
+    plan: &WatchPlan,
+) -> ScanReport {
+    let updated = Scanner::new(&fixture.root)
+        .options(options.clone())
+        .scan_watch_plan(previous, plan)
+        .unwrap();
+    let full = Scanner::new(&fixture.root)
+        .options(options.clone())
+        .scan()
+        .unwrap();
+    assert_eq!(relatives(&updated), relatives(&full));
+    assert_eq!(
+        updated
+            .files
+            .iter()
+            .map(|file| (&file.relative, file.bytes, &file.content_hash))
+            .collect::<Vec<_>>(),
+        full.files
+            .iter()
+            .map(|file| (&file.relative, file.bytes, &file.content_hash))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        updated
+            .skipped
+            .iter()
+            .map(|entry| (&entry.relative, entry.kind, &entry.detail))
+            .collect::<Vec<_>>(),
+        full.skipped
+            .iter()
+            .map(|entry| (&entry.relative, entry.kind, &entry.detail))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(updated.complete, full.complete);
+    assert_eq!(updated.revision, full.revision);
+    assert_eq!(updated.descriptor, full.descriptor);
+    updated
 }
 
 pub fn build_scan_corpus(prefix: &str, directories: usize, files_per_language: usize) -> Fixture {

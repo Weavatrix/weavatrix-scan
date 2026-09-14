@@ -10,13 +10,28 @@
 The filesystem-evidence layer of the [Weavatrix ecosystem](https://weavatrix.com/ecosystem).
 
 `weavatrix-scan` is a deterministic, read-only repository scanner for static
-analysis, code intelligence, indexing, and AI tooling.
+analysis, code intelligence, indexing, and AI tooling. It stays a MIT library
+for file discovery, selection, reading, and a verifiable manifest. Parsers,
+search, graphs, embeddings, secret scanners, MCP servers, and daemons are
+consumers—not features of this crate.
+
+Scan has three jobs:
+
+1. **One-shot manifest** — selected files, hashes, revision, policy
+   descriptor, and typed skip evidence.
+2. **Streaming read for an indexer** — borrowed chunks; commit a file only
+   after a successful `FileEnd`. See [docs/RECIPES.md](docs/RECIPES.md).
+3. **Correct manifest update** — watcher plans bound to the same policy, with
+   prefix-aware directory invalidation. See `ScanSession`.
 
 It does more than walk a directory. A scan produces a stable manifest with
 normalized paths, file sizes, optional content hashes, an aggregate revision,
-and explicit evidence explaining why files were skipped. Linux and macOS builds
-have zero mandatory runtime dependencies; Windows uses only `winapi-util` for
-native volume and file identities.
+a versioned selection descriptor, and explicit evidence explaining why files
+were skipped. Linux and macOS builds have zero mandatory runtime
+dependencies; Windows uses only `winapi-util` for native volume and file
+identities. Walker capability tables and historical timings live in
+[docs/WALKERS.md](docs/WALKERS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+The filesystem-boundary model is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Why another repository walker?
 
@@ -56,8 +71,11 @@ pipeline.
 
 ### Competitive position
 
-Against the versions tested in this repository (`ignore` 0.4.31, `walkdir`
-2.5.0, `jwalk` 0.8.1, and `dirwalk` 1.1.1), Weavatrix Scan is the strongest
+Against the versions historically measured in this repository (`ignore`
+0.4.31, `walkdir` 2.5.0, `jwalk` 0.8.1, and `dirwalk` 1.1.1), Weavatrix Scan
+is the strongest. Those timings are not valid for `ignore` 0.4.33 or
+`jwalk` 0.9.0 until the benches are re-run. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md). Weavatrix Scan remains the strongest
 overall fit when the output must be a deterministic, explainable code-scanner
 manifest rather than only a stream of directory entries. It is not the
 universal winner for every walker workload:
@@ -159,28 +177,28 @@ and macOS; the million-file profile remains opt-in.
 
 ```toml
 [dependencies]
-weavatrix-scan = "0.4"
+weavatrix-scan = "0.5"
 ```
 
 Enable serialization only when needed:
 
 ```toml
 [dependencies]
-weavatrix-scan = { version = "0.4", features = ["serde"] }
+weavatrix-scan = { version = "0.5", features = ["serde"] }
 ```
 
 Enable direct conversion from `notify::Event` without making a watcher runtime
 mandatory for other users:
 
 ```toml
-weavatrix-scan = { version = "0.4", features = ["notify"] }
+weavatrix-scan = { version = "0.5", features = ["notify"] }
 ```
 
 Enable direct existing/new Rayon pool integration without changing the default
 scheduler:
 
 ```toml
-weavatrix-scan = { version = "0.4", features = ["rayon"] }
+weavatrix-scan = { version = "0.5", features = ["rayon"] }
 ```
 
 The default build has no third-party runtime dependency on Unix. Windows uses
@@ -612,8 +630,11 @@ plans.
 - `skipped`: stable, sorted evidence for excluded entries;
 - `warnings`: non-fatal ignore-file and local I/O diagnostics;
 - `ignore_sources`: typed location and hash of every loaded selection input;
-- `revision`: SHA-256 digest over ignore inputs, selected paths, optional content
-  hashes, portability, and partial-termination state;
+- `revision`: domain-separated SHA-256 over ignore inputs, selected paths,
+  file sizes, optional content hashes, portability, and termination. It is
+  not a completeness check and is not a policy identity;
+- `descriptor`: versioned selection and content-policy fingerprint used to
+  decide whether a watch update may reuse a previous report;
 - `complete`: false when local errors made the evidence partial.
 - `termination`: typed reason for a bounded or cancelled partial scan;
 - `portable`: false when host-level Git configuration affected selection.
@@ -764,11 +785,13 @@ any watcher library into sorted relative `WatchPlan` invalidations. Events
 outside the root are rejected, while directory, ignore-source, and explicit
 rescan events request a full scan. `ScanCache::apply_watch_plan` removes only
 affected entries or clears the cache when selection may have changed.
-`Scanner::scan_watch_plan` goes further: for a safe file-only plan it re-matches
-and inspects only changed paths, removes deleted paths from the previous
-manifest, keeps unchanged evidence, and recomputes the deterministic revision
-without traversing the tree. Structural, unsafe, partial, or selection-changing
-plans automatically use a complete scan.
+`Scanner::scan_watch_plan` and `ScanSession` go further: for a safe file-only
+plan they re-match and inspect only changed paths, drop deleted paths and
+their confirmed descendants (`src` does not remove `src2`), keep unchanged
+evidence, and recompute the deterministic revision without traversing the
+tree. A policy/`descriptor` mismatch, ignore-source change, structural event,
+or unsafe path automatically uses a complete scan. `ScanCache::invalidate`
+uses the same prefix rule.
 For indexes that consume bytes directly, `visit_changed_content` performs the
 same safe path matching and one-pass verified content delivery without walking
 unchanged directories. Its revision covers only the changed subset;

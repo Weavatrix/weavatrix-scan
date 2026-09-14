@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 pub(super) fn content_file<'a>(
@@ -58,6 +60,8 @@ pub(super) fn cancel(options: &ScanOptions) {
 pub(crate) fn validate_cached(
     scanned: &mut ScannedFile,
     expected_fingerprint: &str,
+    options: &ScanOptions,
+    started: Instant,
 ) -> io::Result<CachedValidation> {
     let mut file = File::open(&scanned.absolute)?;
     let before = snapshot(&file)?;
@@ -66,22 +70,25 @@ pub(crate) fn validate_cached(
     }
 
     let mut fingerprint = ContentFingerprint::new();
-    let mut bytes_read = 0_u64;
     let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        bytes_read = bytes_read.saturating_add(read as u64);
-        fingerprint.write(&buffer[..read]);
+    let (bytes_read, status) = crate::content::bounded::read_bounded(
+        &mut file,
+        &mut buffer,
+        super::read_limits(before.bytes, options),
+        super::read_control(options, started),
+        |chunk| {
+            fingerprint.write(chunk);
+            Ok(true)
+        },
+    )?;
+    if !matches!(status, crate::content::bounded::BoundedReadStatus::Complete)
+        || bytes_read != before.bytes
+    {
+        return Ok(CachedValidation::Concurrent);
     }
 
     let after = snapshot(&file)?;
-    if bytes_read != before.bytes
-        || before.bytes != after.bytes
-        || !reusable(&before.version, &after.version)
-    {
+    if before.bytes != after.bytes || !reusable(&before.version, &after.version) {
         return Ok(CachedValidation::Concurrent);
     }
     scanned.version = after.version;

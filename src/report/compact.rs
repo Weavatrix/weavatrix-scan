@@ -43,6 +43,7 @@ impl CompactScanReport {
             warnings: self.warnings,
             ignore_sources: self.ignore_sources,
             revision: self.revision,
+            descriptor: self.descriptor,
             complete: self.complete,
             termination: self.termination,
             portable: self.portable,

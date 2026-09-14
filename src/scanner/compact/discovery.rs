@@ -39,6 +39,7 @@ pub(crate) fn scan_repository_compact_with_runtime(
         )?;
     }
     sort_evidence(&mut evidence);
+    evidence.descriptor = crate::ScanDescriptor::from_options(options);
     let revision = compact_revision(&evidence, &files);
     evidence.finish_recording();
     Ok(CompactScanReport {
@@ -48,6 +49,7 @@ pub(crate) fn scan_repository_compact_with_runtime(
         warnings: evidence.warnings,
         ignore_sources: evidence.ignore_sources,
         revision,
+        descriptor: evidence.descriptor,
         complete: evidence.complete,
         termination: evidence.termination,
         portable: evidence.portable,

@@ -18,6 +18,7 @@ impl FinishedContentVisit {
             warnings: self.report.warnings,
             ignore_sources: self.report.ignore_sources,
             revision: self.report.revision,
+            descriptor: crate::ScanDescriptor::default(),
             complete: self.report.complete,
             termination: self.report.termination,
             portable: self.report.portable,

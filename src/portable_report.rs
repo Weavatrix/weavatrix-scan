@@ -53,6 +53,8 @@ pub struct PortableScanReport {
     pub warnings: Vec<PortableScanWarning>,
     pub ignore_sources: Vec<PortableIgnoreSourceEvidence>,
     pub revision: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub descriptor: crate::ScanDescriptor,
     pub complete: bool,
     pub termination: Option<ScanTermination>,
     /// Whether selection itself was independent of host-level Git configuration.
@@ -95,6 +97,7 @@ impl From<&ScanReport> for PortableScanReport {
                 .collect(),
             ignore_sources,
             revision: String::new(),
+            descriptor: report.descriptor.clone(),
             complete: report.complete,
             termination: report.termination,
             selection_portable: report.portable,
@@ -174,32 +177,33 @@ fn hash_text(text: &str) -> String {
 }
 
 fn portable_revision(report: &PortableScanReport) -> String {
-    let mut revision = FingerprintHasher::new();
+    let mut hasher = FingerprintHasher::new();
+    hasher.write(b"scan-revision\x01");
     for source in &report.ignore_sources {
-        revision.write(format!("{:?}", source.kind).as_bytes());
-        revision.write(&[0]);
-        revision.write(
+        crate::scan_identity::write_ignore_kind(&mut hasher, source.kind);
+        hasher.write(&[0]);
+        hasher.write(
             source
                 .repository_relative
                 .as_deref()
                 .unwrap_or("<external>")
                 .as_bytes(),
         );
-        revision.write(&[0]);
-        revision.write(source.content_hash.as_bytes());
-        revision.write(&[0xfe]);
+        hasher.write(&[0]);
+        hasher.write(source.content_hash.as_bytes());
+        hasher.write(&[0xfe]);
     }
     for file in &report.files {
-        revision.write(file.relative.as_bytes());
-        revision.write(&[0]);
-        revision.write(&file.bytes.to_le_bytes());
-        revision.write(file.content_hash.as_deref().unwrap_or("").as_bytes());
-        revision.write(&[0xff]);
+        crate::scan_identity::write_selected_file(
+            &mut hasher,
+            &file.relative,
+            file.bytes,
+            file.content_hash.as_deref(),
+        );
     }
-    revision.write(&[u8::from(report.complete)]);
-    revision.write(&[u8::from(report.selection_portable)]);
+    hasher.write(&[u8::from(report.selection_portable)]);
     if let Some(termination) = report.termination {
-        revision.write(format!("{termination:?}").as_bytes());
+        crate::scan_identity::write_termination(&mut hasher, termination);
     }
-    revision.finish()
+    hasher.finish()
 }

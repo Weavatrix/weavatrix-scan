@@ -20,6 +20,7 @@
         "src/path_serde.rs",
         "src/portable_report.rs",
         "src/report",
+        "src/scan_identity.rs",
         "src/scan_stream.rs",
         "src/summary.rs",
         "src/walk_types",
@@ -72,6 +73,7 @@
         "src/multi_scanner.rs",
         "src/scan_finalize.rs",
         "src/scan_limits.rs",
+        "src/session.rs",
         "src/snapshot.rs"
       ]
     },

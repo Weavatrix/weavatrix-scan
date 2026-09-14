@@ -2,7 +2,8 @@
 //!
 //! `weavatrix-scan` never executes repository code or reads outside the
 //! repository boundary. Symbolic links are skipped by default and guarded by
-//! boundary/cycle checks when explicitly enabled.
+//! boundary/cycle checks when explicitly enabled. A sequential walk is not an
+//! atomic snapshot of the tree.
 //!
 //! Use [`ScanReport::to_portable`] to cross trust boundaries without exposing
 //! host paths, and [`ScanReport::content_provider`] to reopen selected content
@@ -33,11 +34,13 @@ mod portable_report;
 mod report;
 mod runtime;
 mod scan_finalize;
+mod scan_identity;
 mod scan_limits;
 mod scan_match;
 mod scan_stream;
 mod scanner;
 mod selection;
+mod session;
 mod snapshot;
 mod stateful_walk;
 mod stdout;
@@ -75,6 +78,7 @@ pub use parallel::{
 pub use parallel_multi::{
     ParallelMultiVisitReport, ParallelMultiWalkEvent, ParallelMultiWalkReport, ParallelMultiWalker,
 };
+pub use path::is_same_or_descendant;
 pub use portable_report::{
     PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
     PortableSkippedEntry,
@@ -87,9 +91,11 @@ pub use report::{
 #[cfg(feature = "rayon")]
 pub use runtime::RayonExecutor;
 pub use runtime::{ParallelExecutor, ParallelJob, ParallelRuntime};
+pub use scan_identity::{SCAN_DESCRIPTOR_VERSION, ScanDescriptor};
 pub use scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
 pub use scanner::{Scanner, scan_repository, scan_repository_compact};
 pub use selection::{SelectionDecision, SelectionDisposition, SelectionMatcher};
+pub use session::ScanSession;
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};
 pub use stateful_walk::{
     ParallelStatefulWalker, StatefulWalkBuilder, StatefulWalkEntry, StatefulWalker,

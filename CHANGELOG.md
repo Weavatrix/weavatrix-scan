@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-14
+
+- Bind watch updates to a versioned `ScanDescriptor` so a silent policy change
+  cannot reuse the previous selected set.
+- Invalidate watch removals and replacements by path-component prefix, so an
+  outgoing directory rename or directory delete drops the confirmed subtree
+  without treating `src` as a prefix of `src2`.
+- Cap every content read with a shared bounded reader: expected size,
+  `max_file_bytes`, one growth-detection byte, and cooperative cancel/deadline
+  checks between chunks.
+- Encode `revision` with domain-separated tags and file sizes. Completeness
+  stays a separate flag; policy lives on `descriptor`.
+- Add `ScanSession` and a Node session/paging/`AbortSignal` path. Align the
+  npm package and Rust crate at 0.5.0.
+- Document the filesystem-boundary threat model, incremental `O(N)` cost, and
+  a current benchmark matrix. Pin comparison crates to `ignore` 0.4.33 and
+  `jwalk` 0.9.0 without carrying old timings forward.
+
 - Add `IgnorePolicy::none()` so consumers can disable every ignore source.
 - Add `ScanOptions::with_standard_skips` to make the skip-list contract explicit.
 

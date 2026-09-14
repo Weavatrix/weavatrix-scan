@@ -4,7 +4,7 @@ use crate::path::normalized_relative_path;
 use crate::report::{ScanReport, ScannedFile};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io;
 use std::path::Path;
 
 /// Evidence used to bind returned bytes to a scan snapshot.
@@ -142,13 +142,26 @@ impl<'a> SnapshotContentProvider<'a> {
             return Err(SnapshotReadError::Stale(relative.to_owned()));
         }
 
-        let read_limit = snapshot.bytes.saturating_add(1);
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         let mut bytes = Vec::new();
-        (&mut file)
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|error| map_io(relative, error))?;
-        if bytes.len() != expected_bytes {
+        let (read, status) = crate::content::read_bounded(
+            &mut file,
+            &mut buffer,
+            crate::content::BoundedReadLimits {
+                expected_bytes: snapshot.bytes,
+                max_content_bytes: snapshot.bytes,
+            },
+            crate::content::ReadControl::default(),
+            |chunk| {
+                bytes.extend_from_slice(chunk);
+                Ok(true)
+            },
+        )
+        .map_err(|error| map_io(relative, error))?;
+        if !matches!(status, crate::content::BoundedReadStatus::Complete)
+            || read != snapshot.bytes
+            || bytes.len() != expected_bytes
+        {
             return Err(SnapshotReadError::Stale(relative.to_owned()));
         }
 

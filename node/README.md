@@ -57,6 +57,17 @@ Runs on the native worker pool; the JavaScript event loop stays free.
 
 The blocking form, for CLIs and controlled startup paths.
 
+### `ScanSession`
+
+Keeps the last native report and applies a watch plan without asking JavaScript
+to hold two giant JSON trees. `files({ batchSize })` is an async iterator of
+bounded pages so a slow consumer does not accumulate unbounded batches.
+
+### `scanDiagnostics()`
+
+Reports the Rust core version, npm package version, target triple, and that
+musl is unsupported.
+
 | Parameter | Type | Notes |
 | --- | --- | --- |
 | `root` | `string` | Repository root. Must be an existing directory. |
@@ -70,7 +81,12 @@ The blocking form, for CLIs and controlled startup paths.
 | `overrideRules` | `string[]` | — | Gitignore-syntax rules applied above discovered ignore files. A leading `!` re-includes. |
 | `metadataOnly` | `boolean` | `false` | Skips content reads: no hashing, no binary detection. The fastest useful mode. |
 | `selectedFilesOnly` | `boolean` | `false` | Returns only selected files and drops per-entry skip records, which keeps memory flat on very large trees. |
-| `skipHidden` | `boolean` | `true` | Whether dotfiles and dot-directories are skipped. |
+| `skipHidden` | `boolean` | scanner default | Whether dotfiles and dot-directories are skipped. |
+| `standardSkips` | `boolean` | `true` | Skip generated/vendor directories such as `node_modules`. |
+| `ignorePolicy` | `string` | `repository` | `repository`, `none`, or `gitCompatible`. |
+| `hashFileContents` | `boolean` | `true` | Set `false` for metadata-only consumers. |
+| `compact` | `boolean` | `false` | Return the compact cache JSON instead of the portable report. |
+| `signal` | `AbortSignal` | — | Cancels the native scan. The report then has an explicit `termination`. |
 | `maxFileBytes` | `number` | scanner default | Files above this are skipped with typed evidence rather than read. |
 | `maxEntries` | `number` | unbounded | Hard entry bound. Hitting it sets `complete: false` and `termination`. |
 | `maxTotalBytes` | `number` | unbounded | Hard byte bound, same reporting. |
