@@ -15,8 +15,9 @@ bun add weavatrix-scan
 ```
 
 ```js
-const { scanRepository } = require('weavatrix-scan')
+const { scanPaths, scanRepository } = require('weavatrix-scan')
 
+const paths = await scanPaths(process.cwd())
 const report = await scanRepository(process.cwd(), {
   extensions: ['js', 'ts', 'rs'],
   selectedFilesOnly: true,
@@ -48,6 +49,15 @@ top can be cached, diffed, or trusted. So the report carries:
 ---
 
 ## API
+
+### `scanPaths(root, options?) → Promise<string[]>`
+
+Sorted repository-relative paths from native code. Same ignore and extension
+selection as a scan, without building or JSON-encoding a portable report.
+
+### `scanPathsSync(root, options?) → string[]`
+
+The blocking form of `scanPaths`.
 
 ### `scanRepository(root, options?) → Promise<ScanReport>`
 
@@ -163,13 +173,12 @@ Medians of three independent runs over 20,000 files:
 
 | Contract | Node 24 | Bun 1.3 |
 | --- | ---: | ---: |
-| Sorted relative paths | **0.94x** (0.83–1.01) | **0.94x** (0.93–1.14) |
-| Sorted paths **plus byte sizes** | **80.1x** (77.5–82.7) | **86.7x** (84.0–92.4) |
+| Sorted relative paths (`scanPaths`) | **1.27x** (1.01–1.35) | **1.07x** (1.07–1.09) |
+| Sorted paths **plus byte sizes** | **7.79x** (7.18–7.90) | **10.48x** (9.48–10.93) |
 
-The first row is deliberately unfavourable and stays published: `fdir` returns
-raw paths while Weavatrix still performs its scanner metadata work, so the two
-land close together and the ordering flips between runs. The second row is the
-equal consumer-facing contract, where `fdir` needs one `statSync` per path.
+The first row times `scanPaths` against `fdir`: same sorted path array, no
+portable report. The second row is the equal consumer-facing manifest
+contract, where `fdir` needs one `statSync` per path.
 
 ---
 

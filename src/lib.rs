@@ -94,7 +94,7 @@ pub use runtime::RayonExecutor;
 pub use runtime::{ParallelExecutor, ParallelJob, ParallelRuntime};
 pub use scan_identity::{SCAN_DESCRIPTOR_VERSION, ScanDescriptor};
 pub use scan_stream::{ScanSink, ScanSinkControl, ScanStreamReport};
-pub use scanner::{Scanner, scan_repository, scan_repository_compact};
+pub use scanner::{Scanner, scan_repository, scan_repository_compact, scan_repository_paths};
 pub use selection::{SelectionDecision, SelectionDisposition, SelectionMatcher};
 pub use session::ScanSession;
 pub use snapshot::{SnapshotContent, SnapshotContentProvider, SnapshotEvidence, SnapshotReadError};

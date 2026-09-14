@@ -708,5 +708,7 @@ module.exports.exportScanCache = nativeBinding.exportScanCache
 module.exports.exportScanCacheSync = nativeBinding.exportScanCacheSync
 module.exports.openScanSession = nativeBinding.openScanSession
 module.exports.scanDiagnostics = nativeBinding.scanDiagnostics
+module.exports.scanPaths = nativeBinding.scanPaths
+module.exports.scanPathsSync = nativeBinding.scanPathsSync
 module.exports.scanRepository = nativeBinding.scanRepository
 module.exports.scanRepositorySync = nativeBinding.scanRepositorySync

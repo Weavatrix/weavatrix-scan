@@ -1,5 +1,5 @@
 use super::{
-    ParallelRuntime, PathBuf, Result, ScanCache, ScanOptions, ScanReport, Scanner, compact,
+    ParallelRuntime, PathBuf, Result, ScanCache, ScanOptions, ScanReport, Scanner, compact, paths,
     scan_repository_with_runtime, watch_update,
 };
 use crate::watch::WatchPlan;
@@ -35,6 +35,16 @@ impl Scanner {
     /// local error occurs under `ErrorPolicy::Abort`.
     pub fn scan(self) -> Result<ScanReport> {
         scan_repository_with_runtime(&self.root, &self.options, None, &self.runtime)
+    }
+
+    /// Collects sorted relative paths without building a portable manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same root and I/O errors as [`Self::scan`]. Cancel and
+    /// timeout surface as interrupted I/O.
+    pub fn scan_paths(self) -> Result<Vec<String>> {
+        paths::scan_repository_paths_with_runtime(&self.root, &self.options, &self.runtime)
     }
 
     /// Scans into a compact manifest that stores the canonical root once.

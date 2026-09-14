@@ -9,6 +9,8 @@ const { getEventListeners } = require('node:events')
 const {
   exportScanCacheSync,
   scanDiagnostics,
+  scanPaths,
+  scanPathsSync,
   scanRepository,
   scanRepositorySync,
   ScanSession,
@@ -30,6 +32,14 @@ test('scans asynchronously without blocking the JavaScript API contract', async 
   assert.equal(report.complete, true)
   assert.deepEqual(report.files.map((file) => file.relative), ['src/a.js', 'src/b.rs'])
   assert.ok(report.revision)
+})
+
+test('scanPaths returns sorted selected relatives without a manifest', async (t) => {
+  const root = fixture(t)
+  const expected = scanRepositorySync(root, { metadataOnly: true, selectedFilesOnly: true })
+    .files.map((file) => file.relative)
+  assert.deepEqual(scanPathsSync(root), expected)
+  assert.deepEqual(await scanPaths(root), expected)
 })
 
 test('metadata-only sync scan avoids content hashes', (t) => {

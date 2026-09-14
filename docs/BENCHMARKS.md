@@ -33,7 +33,9 @@ a deferred export.
 
 ## Node
 
-`node/benchmark/fdir.mjs` remains a paths and path-plus-size control. Add a
+`node/benchmark/fdir.mjs` remains a paths and path-plus-size control. The
+paths row times `scanPathsSync` against `fdir`; the size row still times
+`scanRepositorySync` against `fdir` plus `statSync`. Add a
 bounded parallel async `stat` row when comparing `fdir`; `statSync` is not
 the only competitor shape. A 20k one-byte-file fixture is not a content
 workload. A million-file Windows result does not rank Linux.

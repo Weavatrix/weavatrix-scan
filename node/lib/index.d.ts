@@ -110,6 +110,8 @@ export declare function scanRepository(root: string, options: ScanOptions & { co
 export declare function scanRepository(root: string, options?: ScanOptions): Promise<ScanReport>
 export declare function scanRepositorySync(root: string, options: ScanOptions & { compact: true }): CompactScanReport
 export declare function scanRepositorySync(root: string, options?: ScanOptions): ScanReport
+export declare function scanPaths(root: string, options?: ScanOptions): Promise<string[]>
+export declare function scanPathsSync(root: string, options?: ScanOptions): string[]
 export declare function exportScanCache(root: string, options?: ScanOptions): Promise<ScanCache>
 export declare function exportScanCacheSync(root: string, options?: ScanOptions): ScanCache
 export declare function scanDiagnostics(): ScanDiagnostics

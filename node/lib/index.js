@@ -48,6 +48,24 @@ function scanRepositorySync(root, options) {
   }
 }
 
+async function scanPaths(root, options) {
+  const { json, token, release } = encode(options)
+  try {
+    return await native.scanPaths(root, json, token)
+  } finally {
+    release()
+  }
+}
+
+function scanPathsSync(root, options) {
+  const { json, token, release } = encode(options)
+  try {
+    return native.scanPathsSync(root, json, token)
+  } finally {
+    release()
+  }
+}
+
 async function exportScanCache(root, options) {
   const { json, token, release } = encode(options)
   try {
@@ -160,6 +178,8 @@ class ScanSession {
 module.exports = {
   scanRepository,
   scanRepositorySync,
+  scanPaths,
+  scanPathsSync,
   exportScanCache,
   exportScanCacheSync,
   scanDiagnostics,

@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { fdir } from 'fdir'
 
 const require = createRequire(import.meta.url)
-const { scanRepositorySync } = require('../lib/index.js')
+const { scanPathsSync, scanRepositorySync } = require('../lib/index.js')
 const files = Number(process.env.WEAVATRIX_BENCH_FILES ?? 20_000)
 const rounds = Number(process.env.WEAVATRIX_BENCH_ROUNDS ?? 7)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'weavatrix-scan-bench-'))
@@ -85,8 +85,7 @@ try {
     }
   }
 
-  const oursPaths = () => scanRepositorySync(root, { metadataOnly: true, selectedFilesOnly: true })
-    .files.map((file) => file.relative)
+  const oursPaths = () => scanPathsSync(root)
   const fdirPaths = () => new fdir()
     .withRelativePaths()
     .crawl(root)
@@ -136,7 +135,7 @@ try {
     note: 'statSync row is historical-shaped; asyncStat is bounded parallel fs.promises.stat. Neither is a content workload.',
     results: [
       {
-        contract: 'sorted relative paths; Weavatrix still performs its scanner metadata work',
+        contract: 'sorted relative paths via scanPaths; no portable manifest',
         weavatrixMs: weavatrixPathsMs,
         fdirMs: fdirPathsMs,
         ratio: fdirPathsMs / weavatrixPathsMs,

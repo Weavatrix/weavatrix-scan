@@ -81,6 +81,47 @@ pub fn scan_repository_sync(
     snapshot(&PathBuf::from(root), options, kind)
 }
 
+pub struct ScanPathsTask {
+    root: PathBuf,
+    options: ScanOptions,
+}
+
+impl Task for ScanPathsTask {
+    type Output = Vec<String>;
+    type JsValue = Vec<String>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        collect_paths(&self.root, self.options.clone())
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi]
+pub fn scan_paths(
+    root: String,
+    options_json: Option<String>,
+    cancellation: Option<&JsCancellationToken>,
+) -> Result<AsyncTask<ScanPathsTask>> {
+    let (options, _) = decode_options(options_json, cancellation)?;
+    Ok(AsyncTask::new(ScanPathsTask {
+        root: PathBuf::from(root),
+        options,
+    }))
+}
+
+#[napi]
+pub fn scan_paths_sync(
+    root: String,
+    options_json: Option<String>,
+    cancellation: Option<&JsCancellationToken>,
+) -> Result<Vec<String>> {
+    let (options, _) = decode_options(options_json, cancellation)?;
+    collect_paths(&PathBuf::from(root), options)
+}
+
 #[napi]
 pub fn export_scan_cache(
     root: String,
@@ -135,4 +176,11 @@ fn snapshot(root: &PathBuf, options: ScanOptions, kind: SnapshotKind) -> Result<
         .scan()
         .map_err(scan_error)?;
     encode_report(&report, kind)
+}
+
+fn collect_paths(root: &PathBuf, options: ScanOptions) -> Result<Vec<String>> {
+    Scanner::new(root)
+        .options(options)
+        .scan_paths()
+        .map_err(scan_error)
 }

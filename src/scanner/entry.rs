@@ -9,7 +9,7 @@ use crate::walk_types::{ErrorPolicy, WalkEntry, WalkError, WalkOperation, WalkSk
 use std::fs;
 use std::path::Path;
 
-pub(super) fn prepare_batch_directory<'a>(
+pub(in crate::scanner) fn prepare_batch_directory<'a>(
     matcher: &mut RepositoryMatcher,
     entries: &'a [WalkEntry],
 ) -> Result<Option<&'a Path>> {
@@ -246,7 +246,7 @@ const fn operation_label(operation: WalkOperation) -> &'static str {
     }
 }
 
-pub(super) fn walker_error_into_scan_error(error: WalkError) -> Error {
+pub(in crate::scanner) fn walker_error_into_scan_error(error: WalkError) -> Error {
     let (path, source) = error.into_parts();
     Error::io(path, source)
 }

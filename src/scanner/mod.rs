@@ -18,12 +18,14 @@ mod compact;
 mod content_visit;
 mod discovery;
 mod entry;
+mod paths;
 mod stream;
 mod watch_update;
 
 use entry::{process_entry, record_walk_error, walker_error_into_scan_error};
 
 pub use compact::scan_repository_compact;
+pub use paths::scan_repository_paths;
 
 pub struct Scanner {
     root: PathBuf,

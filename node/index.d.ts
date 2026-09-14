@@ -28,6 +28,10 @@ export declare function openScanSession(root: string, optionsJson?: string | und
 
 export declare function scanDiagnostics(): string
 
+export declare function scanPaths(root: string, optionsJson?: string | undefined | null, cancellation?: CancellationToken | undefined | null): Promise<unknown>
+
+export declare function scanPathsSync(root: string, optionsJson?: string | undefined | null, cancellation?: CancellationToken | undefined | null): Array<string>
+
 export declare function scanRepository(root: string, optionsJson?: string | undefined | null, cancellation?: CancellationToken | undefined | null): Promise<unknown>
 
 export declare function scanRepositorySync(root: string, optionsJson?: string | undefined | null, cancellation?: CancellationToken | undefined | null): string

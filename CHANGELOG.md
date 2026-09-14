@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-14
+
+- Add `scan_repository_paths` / `Scanner::scan_paths` and Node `scanPaths` /
+  `scanPathsSync` for ignore-aware sorted paths without building or
+  JSON-encoding a portable report. The Node paths-only benchmark now times
+  this API against `fdir`.
+
 ## 0.5.0 - 2026-09-14
 
 - Bind watch updates to a versioned `ScanDescriptor` so a silent policy change
