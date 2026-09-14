@@ -67,6 +67,18 @@ impl ScanReport {
     pub fn to_portable(&self) -> PortableScanReport {
         PortableScanReport::from(self)
     }
+
+    /// Converts one page of selected files without rebuilding the whole report.
+    #[must_use]
+    pub fn portable_files_page(&self, offset: usize, limit: usize) -> Vec<PortableScannedFile> {
+        let end = offset.saturating_add(limit);
+        self.files
+            .get(offset..self.files.len().min(end))
+            .unwrap_or(&[])
+            .iter()
+            .map(PortableScannedFile::from)
+            .collect()
+    }
 }
 
 impl From<&ScanReport> for PortableScanReport {

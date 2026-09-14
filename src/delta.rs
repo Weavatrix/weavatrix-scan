@@ -42,6 +42,9 @@ pub struct ScanDelta {
     pub renamed: Vec<RenamedFile>,
     pub unchanged: u64,
     pub selection_inputs_changed: bool,
+    /// True when the versioned scan descriptor differs between reports.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub policy_changed: bool,
     pub scan_state_changed: bool,
     pub quality: DeltaQuality,
 }
@@ -63,6 +66,7 @@ impl ScanDelta {
             renamed: Vec::new(),
             unchanged: 0,
             selection_inputs_changed: previous.ignore_sources != current.ignore_sources,
+            policy_changed: previous.descriptor != current.descriptor,
             scan_state_changed: previous.root != current.root
                 || previous.complete != current.complete
                 || previous.termination != current.termination
@@ -81,6 +85,7 @@ impl ScanDelta {
             && self.modified.is_empty()
             && self.renamed.is_empty()
             && !self.selection_inputs_changed
+            && !self.policy_changed
             && !self.scan_state_changed
     }
 }

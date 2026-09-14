@@ -81,10 +81,19 @@ pub(crate) fn validate_cached(
             Ok(true)
         },
     )?;
-    if !matches!(status, crate::content::bounded::BoundedReadStatus::Complete)
-        || bytes_read != before.bytes
-    {
-        return Ok(CachedValidation::Concurrent);
+    match status {
+        crate::content::bounded::BoundedReadStatus::Cancelled => {
+            return Ok(CachedValidation::Stopped(
+                crate::report::ScanTermination::Cancelled,
+            ));
+        }
+        crate::content::bounded::BoundedReadStatus::Deadline => {
+            return Ok(CachedValidation::Stopped(
+                crate::report::ScanTermination::Timeout,
+            ));
+        }
+        crate::content::bounded::BoundedReadStatus::Complete if bytes_read == before.bytes => {}
+        _ => return Ok(CachedValidation::Concurrent),
     }
 
     let after = snapshot(&file)?;

@@ -4,7 +4,10 @@ use crate::report::{IgnoreSourceKind, ScanTermination};
 use crate::walk_types::{ErrorPolicy, RootSymlinkPolicy};
 
 /// Version of the semantic scan descriptor stored on reports.
-pub const SCAN_DESCRIPTOR_VERSION: u32 = 1;
+///
+/// Version `2` hashes explicit ignore files in author order because later
+/// sources overlay earlier ones. Older descriptors fail [`ScanDescriptor::matches`].
+pub const SCAN_DESCRIPTOR_VERSION: u32 = 2;
 
 /// Versioned selection and content-policy identity.
 ///
@@ -84,13 +87,11 @@ fn write_ignore_policy(hasher: &mut FingerprintHasher, policy: &IgnorePolicy) {
     hasher.write(&[u8::from(policy.git_exclude)]);
     hasher.write(&[u8::from(policy.git_global)]);
     hasher.write(&[u8::from(policy.require_git)]);
-    let mut files = policy
-        .explicit_files
-        .iter()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .collect::<Vec<_>>();
-    files.sort();
-    write_strings(hasher, files.iter().map(String::as_str));
+    for path in &policy.explicit_files {
+        hasher.write(path.to_string_lossy().replace('\\', "/").as_bytes());
+        hasher.write(&[0]);
+    }
+    hasher.write(&[0xfe]);
 }
 
 fn write_strings<'a, I>(hasher: &mut FingerprintHasher, values: I)
@@ -184,5 +185,26 @@ mod tests {
             ScanDescriptor::from_options(&base).version,
             SCAN_DESCRIPTOR_VERSION
         );
+    }
+
+    #[test]
+    fn explicit_ignore_file_order_is_part_of_the_descriptor() {
+        let exclude = std::path::PathBuf::from("exclude.rules");
+        let include = std::path::PathBuf::from("include.rules");
+        let first = ScanOptions::default().with_ignore_policy(
+            crate::IgnorePolicy::none()
+                .with_explicit_file(&exclude)
+                .with_explicit_file(&include),
+        );
+        let reversed = ScanOptions::default().with_ignore_policy(
+            crate::IgnorePolicy::none()
+                .with_explicit_file(&include)
+                .with_explicit_file(&exclude),
+        );
+        assert_ne!(
+            ScanDescriptor::from_options(&first),
+            ScanDescriptor::from_options(&reversed)
+        );
+        assert_eq!(SCAN_DESCRIPTOR_VERSION, 2);
     }
 }

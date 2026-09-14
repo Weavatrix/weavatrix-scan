@@ -74,15 +74,10 @@ impl ScanCache {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let paths = relative_paths
-            .into_iter()
-            .collect::<std::collections::HashSet<_>>();
+        let prefixes = crate::path::collapse_path_prefixes(relative_paths);
         let before = self.entries.len();
-        self.entries.retain(|entry| {
-            !paths
-                .iter()
-                .any(|prefix| crate::path::is_same_or_descendant(&entry.relative, prefix))
-        });
+        self.entries
+            .retain(|entry| !crate::path::path_covered_by_prefixes(&entry.relative, &prefixes));
         before - self.entries.len()
     }
 

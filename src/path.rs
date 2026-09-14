@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 #[cfg(any(unix, windows))]
 use std::fmt::Write as _;
@@ -12,6 +13,44 @@ pub fn is_same_or_descendant(path: &str, prefix: &str) -> bool {
             && path.len() > prefix.len()
             && path.as_bytes().get(prefix.len()) == Some(&b'/')
             && path.starts_with(prefix))
+}
+
+/// Returns whether `path` is covered by any collapsed prefix in `prefixes`.
+///
+/// Ancestor lookup is `O(depth · log k)` after prefixes have been collapsed.
+#[must_use]
+pub fn path_covered_by_prefixes(path: &str, prefixes: &BTreeSet<&str>) -> bool {
+    if prefixes.contains(path) {
+        return true;
+    }
+    let mut rest = path;
+    while let Some((parent, _)) = rest.rsplit_once('/') {
+        if prefixes.contains(parent) {
+            return true;
+        }
+        rest = parent;
+    }
+    false
+}
+
+/// Deduplicates and drops prefixes already covered by a shorter ancestor.
+///
+/// `src` and `src/nested` collapse to `src`. `src` and `src2` stay distinct.
+#[must_use]
+pub fn collapse_path_prefixes<'a, I>(prefixes: I) -> BTreeSet<&'a str>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut sorted = prefixes.into_iter().collect::<Vec<_>>();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut collapsed = BTreeSet::new();
+    for prefix in sorted {
+        if !path_covered_by_prefixes(prefix, &collapsed) {
+            collapsed.insert(prefix);
+        }
+    }
+    collapsed
 }
 
 pub(crate) fn normalized_relative_path(path: &Path) -> String {
@@ -159,5 +198,17 @@ mod tests {
         assert!(super::is_same_or_descendant("src/nested/a.rs", "src"));
         assert!(!super::is_same_or_descendant("src2", "src"));
         assert!(!super::is_same_or_descendant("src", "src/nested"));
+    }
+
+    #[test]
+    fn collapsed_prefixes_keep_component_boundaries() {
+        let prefixes = super::collapse_path_prefixes(["src/nested", "src", "src", "src2"]);
+        assert_eq!(
+            prefixes.iter().copied().collect::<Vec<_>>(),
+            ["src", "src2"]
+        );
+        assert!(super::path_covered_by_prefixes("src/a.rs", &prefixes));
+        assert!(super::path_covered_by_prefixes("src2/b.rs", &prefixes));
+        assert!(!super::path_covered_by_prefixes("src3/c.rs", &prefixes));
     }
 }

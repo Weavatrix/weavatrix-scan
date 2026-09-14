@@ -54,6 +54,7 @@ mod walker;
 mod watch;
 #[cfg(feature = "notify")]
 mod watch_notify;
+mod watch_reason;
 
 pub use cache::{SCAN_CACHE_FORMAT_VERSION, ScanCache, ScanCacheEntry};
 pub use config::{
@@ -78,7 +79,7 @@ pub use parallel::{
 pub use parallel_multi::{
     ParallelMultiVisitReport, ParallelMultiWalkEvent, ParallelMultiWalkReport, ParallelMultiWalker,
 };
-pub use path::is_same_or_descendant;
+pub use path::{collapse_path_prefixes, is_same_or_descendant, path_covered_by_prefixes};
 pub use portable_report::{
     PortableIgnoreSourceEvidence, PortableScanReport, PortableScanWarning, PortableScannedFile,
     PortableSkippedEntry,
@@ -107,3 +108,4 @@ pub use walker::{
     WalkSkipReason, Walker,
 };
 pub use watch::{WatchEvent, WatchEventKind, WatchPlan, WatcherEventAdapter};
+pub use watch_reason::{FullRescanReason, WatchUpdate, WatchUpdateReason};

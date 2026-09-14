@@ -24,6 +24,14 @@ function runOnce(run) {
   return elapsed
 }
 
+async function runAsyncOnce(run) {
+  const started = performance.now()
+  const result = await run()
+  const elapsed = performance.now() - started
+  if (result.length !== files) throw new Error(`parity failure: ${result.length} != ${files}`)
+  return elapsed
+}
+
 function measurePair(left, right) {
   const leftSamples = []
   const rightSamples = []
@@ -36,6 +44,27 @@ function measurePair(left, right) {
     } else {
       rightElapsed = runOnce(right)
       leftElapsed = runOnce(left)
+    }
+    if (round >= 2) {
+      leftSamples.push(leftElapsed)
+      rightSamples.push(rightElapsed)
+    }
+  }
+  return [median(leftSamples), median(rightSamples)]
+}
+
+async function measureAsyncPair(left, right) {
+  const leftSamples = []
+  const rightSamples = []
+  for (let round = 0; round < rounds + 2; round += 1) {
+    let leftElapsed
+    let rightElapsed
+    if (round % 2 === 0) {
+      leftElapsed = await runAsyncOnce(left)
+      rightElapsed = await runAsyncOnce(right)
+    } else {
+      rightElapsed = await runAsyncOnce(right)
+      leftElapsed = await runAsyncOnce(left)
     }
     if (round >= 2) {
       leftSamples.push(leftElapsed)
@@ -84,6 +113,7 @@ try {
     }))
     return sized
   }
+  const oursAsync = async () => ours()
   if (JSON.stringify(oursPaths()) !== JSON.stringify(fdirPaths())) {
     throw new Error('exact relative-path parity failed')
   }
@@ -92,20 +122,13 @@ try {
   if (JSON.stringify(oursParity) !== JSON.stringify(competitorParity)) {
     throw new Error('exact path-and-size parity failed')
   }
-
-  async function runAsyncOnce(run) {
-    const started = performance.now()
-    const result = await run()
-    const elapsed = performance.now() - started
-    if (result.length !== files) throw new Error(`parity failure: ${result.length} != ${files}`)
-    return elapsed
+  if (JSON.stringify(await competitorAsync()) !== JSON.stringify(oursParity)) {
+    throw new Error('exact async-stat path-and-size parity failed')
   }
+
   const [weavatrixPathsMs, fdirPathsMs] = measurePair(oursPaths, fdirPaths)
   const [weavatrixMs, fdirMs] = measurePair(ours, competitor)
-  const asyncSamples = []
-  for (let round = 0; round < rounds; round += 1) {
-    asyncSamples.push(await runAsyncOnce(competitorAsync))
-  }
+  const [weavatrixAsyncMs, fdirAsyncStatMs] = await measureAsyncPair(oursAsync, competitorAsync)
   console.log(JSON.stringify({
     files,
     rounds,
@@ -125,8 +148,10 @@ try {
         ratio: fdirMs / weavatrixMs,
       },
       {
-        contract: 'fdir paths plus bounded parallel async stat',
-        fdirAsyncStatMs: median(asyncSamples),
+        contract: 'identical {relative, bytes} array; fdir paths plus bounded parallel async stat',
+        weavatrixMs: weavatrixAsyncMs,
+        fdirAsyncStatMs,
+        ratio: fdirAsyncStatMs / weavatrixAsyncMs,
       },
     ],
   }, null, 2))

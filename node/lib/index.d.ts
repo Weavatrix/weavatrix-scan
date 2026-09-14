@@ -42,6 +42,41 @@ export interface ScanReport {
   selection_portable: boolean
 }
 
+export interface CompactScannedFile {
+  relative: string
+  bytes: number
+  content?: {
+    content_hash?: string
+    content_fingerprint?: string
+    binary_checked: boolean
+  }
+}
+
+export interface CompactScanReport {
+  root: string
+  files: CompactScannedFile[]
+  skipped: Array<{ relative: string; kind: string; detail?: string }>
+  warnings: Array<{ relative?: string; message: string }>
+  ignore_sources: Array<{ kind: string; location: string; content_hash: string }>
+  revision: string
+  descriptor?: { version: number; policy: string }
+  complete: boolean
+  termination?: string
+  portable: boolean
+}
+
+export interface ScanCache {
+  format_version: number
+  root: string
+  entries: Array<{
+    relative: string
+    bytes: number
+    content_hash: string
+    content_fingerprint?: string
+    binary_checked: boolean
+  }>
+}
+
 export interface ScanDiagnostics {
   rustCoreVersion: string
   packageVersion: string
@@ -59,11 +94,22 @@ export declare class CancellationToken {
 
 export declare class ScanSession {
   constructor(root: string, options?: ScanOptions)
-  snapshot(options?: { compact?: boolean }): ScanReport | object
-  applyWatchPlan(plan: WatchPlan, options?: { compact?: boolean }): ScanReport | object
+  static open(root: string, options?: ScanOptions): Promise<ScanSession>
+  static openSync(root: string, options?: ScanOptions): ScanSession
+  snapshot(options?: { compact?: boolean }): ScanReport | CompactScanReport
+  exportCache(): ScanCache
+  updateReason(): string | undefined
+  applyWatchPlan(plan: WatchPlan, options?: { compact?: boolean; signal?: AbortSignal }): Promise<ScanReport | CompactScanReport>
+  applyWatchPlanSync(plan: WatchPlan, options?: { compact?: boolean; signal?: AbortSignal }): ScanReport | CompactScanReport
   files(options?: { batchSize?: number; signal?: AbortSignal }): AsyncGenerator<ScannedFile[]>
+  close(): void
+  [Symbol.dispose](): void
 }
 
+export declare function scanRepository(root: string, options: ScanOptions & { compact: true }): Promise<CompactScanReport>
 export declare function scanRepository(root: string, options?: ScanOptions): Promise<ScanReport>
+export declare function scanRepositorySync(root: string, options: ScanOptions & { compact: true }): CompactScanReport
 export declare function scanRepositorySync(root: string, options?: ScanOptions): ScanReport
+export declare function exportScanCache(root: string, options?: ScanOptions): Promise<ScanCache>
+export declare function exportScanCacheSync(root: string, options?: ScanOptions): ScanCache
 export declare function scanDiagnostics(): ScanDiagnostics

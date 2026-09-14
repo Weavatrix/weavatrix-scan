@@ -140,6 +140,11 @@ fn record_visit_result(
         Some(VisitedStatus::Concurrent) => {
             record_concurrent_modification(&mut visited.evidence, scanned.relative, options)?;
         }
+        Some(VisitedStatus::Stopped(reason)) => {
+            record_limit_skip(&mut visited.evidence, scanned.relative, *reason, options);
+            visited.evidence.termination = Some(*reason);
+            return Ok(true);
+        }
         None => {}
     }
     if result.visitor_quit {

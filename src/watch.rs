@@ -63,13 +63,10 @@ impl WatchPlan {
     where
         I: IntoIterator<Item = &'a str>,
     {
+        let prefixes = crate::path::collapse_path_prefixes(self.removed.iter().map(String::as_str));
         let mut expanded = known
             .into_iter()
-            .filter(|path| {
-                self.removed
-                    .iter()
-                    .any(|prefix| crate::path::is_same_or_descendant(path, prefix))
-            })
+            .filter(|path| crate::path::path_covered_by_prefixes(path, &prefixes))
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         expanded.sort_unstable();

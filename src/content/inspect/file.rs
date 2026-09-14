@@ -46,13 +46,25 @@ pub(crate) fn inspect(
     if binary {
         return Ok(Inspection::Binary(scanned.relative));
     }
-    if matches!(
-        status,
-        BoundedReadStatus::Grown | BoundedReadStatus::Cancelled | BoundedReadStatus::Deadline
-    ) || (reads_entire_file
-        && (status != BoundedReadStatus::Complete || bytes_read != before.bytes))
-    {
-        return Ok(Inspection::Concurrent(scanned.relative));
+    match status {
+        BoundedReadStatus::Cancelled => {
+            return Ok(Inspection::Stopped(
+                crate::report::ScanTermination::Cancelled,
+            ));
+        }
+        BoundedReadStatus::Deadline => {
+            return Ok(Inspection::Stopped(crate::report::ScanTermination::Timeout));
+        }
+        BoundedReadStatus::Grown => {
+            return Ok(Inspection::Concurrent(scanned.relative));
+        }
+        BoundedReadStatus::Complete | BoundedReadStatus::Stopped
+            if reads_entire_file
+                && (status != BoundedReadStatus::Complete || bytes_read != before.bytes) =>
+        {
+            return Ok(Inspection::Concurrent(scanned.relative));
+        }
+        BoundedReadStatus::Complete | BoundedReadStatus::Stopped => {}
     }
 
     let after = if options.content_validation == ContentValidationPolicy::Strict {

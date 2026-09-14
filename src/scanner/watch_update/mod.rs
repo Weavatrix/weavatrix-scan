@@ -5,22 +5,29 @@ use crate::content::inspect_files;
 use crate::error::{Error, Result};
 use crate::file_version::from_metadata;
 use crate::ignore::{RepositoryMatch, RepositoryMatcher};
-use crate::path::normalized_relative_path;
-use crate::report::{ScanCacheStats, ScanReport, ScannedFile, SkipKind};
+use crate::report::{ScanReport, ScannedFile, SkipKind};
 use crate::runtime::ParallelRuntime;
 use crate::scan_finalize::finalize_report;
 use crate::scan_limits::apply_total_bytes_limit;
 use crate::scan_match::skip_match;
 use crate::walk_types::{WalkError, WalkOperation};
 use crate::watch::WatchPlan;
-use std::fs;
+use crate::watch_reason::{FullRescanReason, WatchUpdate, WatchUpdateReason};
 use std::io;
-use std::path::{Component, Path};
+use std::path::Path;
+
+pub(super) use crate::path::normalized_relative_path;
+pub(super) use std::fs;
+pub(super) use std::path::Component;
 
 mod metadata;
 mod path;
+mod retain;
+mod sources;
 
 use metadata::changed_metadata;
+use retain::prepare_incremental_report;
+use sources::ignore_sources_changed;
 
 pub(super) use path::is_safe_relative;
 use std::time::Instant;
@@ -31,35 +38,32 @@ pub(super) fn scan_watch_plan(
     previous: &ScanReport,
     plan: &WatchPlan,
     parallel_runtime: &ParallelRuntime,
-) -> Result<ScanReport> {
-    if plan.full_rescan
-        || !previous.complete
-        || previous.termination.is_some()
-        || options.limits.max_entries.is_some()
-        || !previous.descriptor.matches(options)
-    {
-        return scan_repository_with_runtime(
-            root,
-            options,
-            Some(&previous.to_cache()),
-            parallel_runtime,
-        );
+) -> Result<WatchUpdate> {
+    if let Some(reason) = early_full_rescan_reason(previous, plan, options) {
+        return full_rescan(root, options, Some(previous), parallel_runtime, reason);
     }
     let canonical = root
         .canonicalize()
         .map_err(|source| Error::io(root, source))?;
     if canonical != previous.root || !canonical.is_dir() {
-        return scan_repository_with_runtime(root, options, None, parallel_runtime);
+        return full_rescan(
+            root,
+            options,
+            None,
+            parallel_runtime,
+            FullRescanReason::StructuralChange,
+        );
     }
     if plan
         .invalidated()
         .any(|relative| !is_safe_relative(relative))
     {
-        return scan_repository_with_runtime(
+        return full_rescan(
             root,
             options,
-            Some(&previous.to_cache()),
+            Some(previous),
             parallel_runtime,
+            FullRescanReason::StructuralChange,
         );
     }
 
@@ -72,21 +76,23 @@ pub(super) fn scan_watch_plan(
             ChangedPath::Candidate(file) => changed_candidates.push(*file),
             ChangedPath::MissingOrSkipped => {}
             ChangedPath::NeedsFullScan => {
-                return scan_repository_with_runtime(
+                return full_rescan(
                     root,
                     options,
-                    Some(&previous.to_cache()),
+                    Some(previous),
                     parallel_runtime,
+                    FullRescanReason::StructuralChange,
                 );
             }
         }
     }
-    if ignore_sources_changed(matcher.sources(), &previous.ignore_sources) {
-        return scan_repository_with_runtime(
+    if ignore_sources_changed(matcher.sources(), &previous.ignore_sources, plan) {
+        return full_rescan(
             root,
             options,
-            Some(&previous.to_cache()),
+            Some(previous),
             parallel_runtime,
+            FullRescanReason::IgnoreInputChanged,
         );
     }
 
@@ -108,38 +114,47 @@ pub(super) fn scan_watch_plan(
     }
     apply_total_bytes_limit(&mut report, options);
     finalize_report(&mut report, options);
-    Ok(report)
+    Ok(WatchUpdate {
+        report,
+        reason: WatchUpdateReason::Incremental,
+    })
 }
 
-fn ignore_sources_changed(
-    current: &[crate::report::IgnoreSourceEvidence],
-    previous: &[crate::report::IgnoreSourceEvidence],
-) -> bool {
-    current.len() != previous.len()
-        || current
-            .iter()
-            .any(|source| !previous.iter().any(|known| known == source))
+fn early_full_rescan_reason(
+    previous: &ScanReport,
+    plan: &WatchPlan,
+    options: &ScanOptions,
+) -> Option<FullRescanReason> {
+    if plan.full_rescan {
+        return Some(FullRescanReason::StructuralChange);
+    }
+    if !previous.complete || previous.termination.is_some() || options.limits.max_entries.is_some()
+    {
+        return Some(FullRescanReason::IncompletePreviousState);
+    }
+    if previous.descriptor.matches(options) {
+        None
+    } else {
+        Some(FullRescanReason::PolicyChanged)
+    }
 }
 
-fn prepare_incremental_report(previous: &ScanReport, plan: &WatchPlan) -> ScanReport {
-    let mut report = previous.clone();
-    report
-        .files
-        .retain(|file| !plan.invalidates_path(&file.relative));
-    report
-        .skipped
-        .retain(|entry| !plan.invalidates_path(&entry.relative));
-    report.warnings.retain(|warning| {
-        warning
-            .relative
-            .as_deref()
-            .is_none_or(|relative| !plan.invalidates_path(relative))
-    });
-    report.revision.clear();
-    report.complete = true;
-    report.termination = None;
-    report.cache = ScanCacheStats::default();
-    report
+fn full_rescan(
+    root: &Path,
+    options: &ScanOptions,
+    previous: Option<&ScanReport>,
+    parallel_runtime: &ParallelRuntime,
+    reason: FullRescanReason,
+) -> Result<WatchUpdate> {
+    Ok(WatchUpdate {
+        report: scan_repository_with_runtime(
+            root,
+            options,
+            previous.map(ScanReport::to_cache).as_ref(),
+            parallel_runtime,
+        )?,
+        reason: WatchUpdateReason::FullRescan(reason),
+    })
 }
 
 pub(super) enum ChangedPath {

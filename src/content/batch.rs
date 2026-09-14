@@ -122,6 +122,12 @@ fn inspect_chunk(
                     record_concurrent_modification(&mut inspected, file.relative, options)?;
                     continue;
                 }
+                Ok(inspect::CachedValidation::Stopped(reason)) => {
+                    stop.request(reason);
+                    record_limit_skip(&mut inspected, file.relative, reason, options);
+                    inspected.termination = Some(reason);
+                    continue;
+                }
                 Err(source) => {
                     record_io_error(
                         &mut inspected,
@@ -143,6 +149,11 @@ fn inspect_chunk(
             }
             Ok(Inspection::Concurrent(relative)) => {
                 record_concurrent_modification(&mut inspected, relative, options)?;
+            }
+            Ok(Inspection::Stopped(reason)) => {
+                stop.request(reason);
+                record_limit_skip(&mut inspected, error_file.relative, reason, options);
+                inspected.termination = Some(reason);
             }
             Err(source) => {
                 record_io_error(

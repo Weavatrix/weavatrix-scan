@@ -60,8 +60,15 @@ The blocking form, for CLIs and controlled startup paths.
 ### `ScanSession`
 
 Keeps the last native report and applies a watch plan without asking JavaScript
-to hold two giant JSON trees. `files({ batchSize })` is an async iterator of
-bounded pages so a slow consumer does not accumulate unbounded batches.
+to hold two giant JSON trees. Prefer `ScanSession.open()` / `applyWatchPlan()`
+so the constructor and update can run off the JavaScript thread.
+`files({ batchSize })` reads one snapshot generation; an update between pages
+throws instead of mixing manifests.
+
+### `exportScanCache(root, options?) → Promise<ScanCache>`
+
+Returns local reusable hash evidence (`format_version`, `root`, `entries`).
+This is not a compact manifest and is empty in metadata-only mode.
 
 ### `scanDiagnostics()`
 
@@ -85,7 +92,7 @@ musl is unsupported.
 | `standardSkips` | `boolean` | `true` | Skip generated/vendor directories such as `node_modules`. |
 | `ignorePolicy` | `string` | `repository` | `repository`, `none`, or `gitCompatible`. |
 | `hashFileContents` | `boolean` | `true` | Set `false` for metadata-only consumers. |
-| `compact` | `boolean` | `false` | Return the compact cache JSON instead of the portable report. |
+| `compact` | `boolean` | `false` | Return a compact manifest (`files`, `revision`, `complete`, `termination`) instead of the portable report. Use `exportScanCache()` for the local hash cache. |
 | `signal` | `AbortSignal` | — | Cancels the native scan. The report then has an explicit `termination`. |
 | `maxFileBytes` | `number` | scanner default | Files above this are skipped with typed evidence rather than read. |
 | `maxEntries` | `number` | unbounded | Hard entry bound. Hitting it sets `complete: false` and `termination`. |

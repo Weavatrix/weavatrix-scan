@@ -5,7 +5,7 @@ use crate::content_visit::{
 };
 use crate::file_version::{reusable, snapshot};
 use crate::hash::{ContentFingerprint, FingerprintHasher};
-use crate::report::ScannedFile;
+use crate::report::{ScanTermination, ScannedFile};
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -39,12 +39,14 @@ pub(super) enum Inspection {
     Selected(ScannedFile),
     Binary(String),
     Concurrent(String),
+    Stopped(ScanTermination),
 }
 
 pub(super) enum CachedValidation {
     Match,
     Changed,
     Concurrent,
+    Stopped(ScanTermination),
 }
 
 pub(super) struct VisitedInspection {
@@ -61,4 +63,5 @@ pub(super) enum VisitedStatus {
     Selected,
     Binary,
     Concurrent,
+    Stopped(ScanTermination),
 }

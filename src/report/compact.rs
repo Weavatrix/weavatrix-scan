@@ -1,4 +1,53 @@
-use super::{CompactScanReport, CompactScannedFile, FileVersion, PathBuf, ScanReport, ScannedFile};
+use super::{
+    CompactContentEvidence, CompactScanReport, CompactScannedFile, FileVersion, PathBuf,
+    ScanReport, ScannedFile,
+};
+
+impl ScanReport {
+    /// Copies selected files and scan state into a root-shared compact manifest.
+    ///
+    /// Unlike [`Self::to_cache`], this keeps every selected file plus
+    /// completeness, termination, and ignore evidence.
+    #[must_use]
+    pub fn to_compact(&self) -> CompactScanReport {
+        CompactScanReport {
+            root: self.root.clone(),
+            files: self.files.iter().map(CompactScannedFile::from).collect(),
+            skipped: self.skipped.clone(),
+            warnings: self.warnings.clone(),
+            ignore_sources: self.ignore_sources.clone(),
+            revision: self.revision.clone(),
+            descriptor: self.descriptor.clone(),
+            complete: self.complete,
+            termination: self.termination,
+            portable: self.portable,
+            cache: self.cache,
+        }
+    }
+}
+
+impl From<&ScannedFile> for CompactScannedFile {
+    fn from(file: &ScannedFile) -> Self {
+        let has_content = file.content_hash.is_some()
+            || file.content_fingerprint.is_some()
+            || file.binary_checked;
+        Self {
+            relative: file.relative.clone().into_boxed_str(),
+            bytes: file.bytes,
+            content: has_content.then(|| {
+                Box::new(CompactContentEvidence {
+                    content_hash: file.content_hash.clone().map(String::into_boxed_str),
+                    content_fingerprint: file
+                        .content_fingerprint
+                        .clone()
+                        .map(String::into_boxed_str),
+                    version: file.version,
+                    binary_checked: file.binary_checked,
+                })
+            }),
+        }
+    }
+}
 
 impl CompactScanReport {
     /// Materializes an absolute path for one compact entry.

@@ -85,6 +85,19 @@ impl Scanner {
     ///
     /// Returns the same errors as [`Self::scan`].
     pub fn scan_watch_plan(self, previous: &ScanReport, plan: &WatchPlan) -> Result<ScanReport> {
+        Ok(self.scan_watch_plan_detailed(previous, plan)?.report)
+    }
+
+    /// Applies a watcher plan and reports whether the fast path was kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::scan`].
+    pub fn scan_watch_plan_detailed(
+        self,
+        previous: &ScanReport,
+        plan: &WatchPlan,
+    ) -> Result<crate::WatchUpdate> {
         watch_update::scan_watch_plan(&self.root, &self.options, previous, plan, &self.runtime)
     }
 }

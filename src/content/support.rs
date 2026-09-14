@@ -58,12 +58,18 @@ impl InspectionStop {
             None
         };
         if let Some(reason) = reason {
-            let code = termination_code(reason);
+            self.request(reason);
+        }
+        termination_from_code(self.0.load(Ordering::Acquire))
+    }
+
+    pub(super) fn request(&self, reason: ScanTermination) {
+        let code = termination_code(reason);
+        if code != 0 {
             let _ = self
                 .0
                 .compare_exchange(0, code, Ordering::AcqRel, Ordering::Acquire);
         }
-        termination_from_code(self.0.load(Ordering::Acquire))
     }
 }
 

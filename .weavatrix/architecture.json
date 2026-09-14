@@ -24,7 +24,8 @@
         "src/scan_stream.rs",
         "src/summary.rs",
         "src/walk_types",
-        "src/watch.rs"
+        "src/watch.rs",
+        "src/watch_reason.rs"
       ]
     },
     {

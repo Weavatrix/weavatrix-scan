@@ -79,7 +79,7 @@ where
         }
     }
 
-    if let Some(visitor_quit) = read_chunks(
+    if let Some((termination, visitor_quit)) = read_chunks(
         &mut file,
         scanned,
         options,
@@ -90,7 +90,7 @@ where
         visitor,
         &mut progress,
     )? {
-        return Ok(progress.outcome(None, visitor_quit));
+        return Ok(progress.outcome(termination.map(VisitedStatus::Stopped), visitor_quit));
     }
     finish_visit(
         &file, scanned, options, context, sequence, visitor, &before, progress,
@@ -120,7 +120,7 @@ fn read_chunks<V>(
     buffer: &mut [u8],
     visitor: &mut V,
     progress: &mut VisitProgress,
-) -> io::Result<Option<bool>>
+) -> io::Result<Option<(Option<crate::report::ScanTermination>, bool)>>
 where
     V: for<'event> FnMut(ContentVisitEvent<'event>) -> ContentVisitControl,
 {
@@ -173,15 +173,29 @@ where
     match status {
         crate::content::bounded::BoundedReadStatus::Complete => {
             progress.reached_eof = true;
-            Ok(if visitor_quit { Some(true) } else { None })
+            Ok(if visitor_quit {
+                Some((None, true))
+            } else {
+                None
+            })
         }
         crate::content::bounded::BoundedReadStatus::Stopped
         | crate::content::bounded::BoundedReadStatus::Grown => {
             progress.reached_eof = false;
-            Ok(if visitor_quit { Some(true) } else { None })
+            Ok(if visitor_quit {
+                Some((None, true))
+            } else {
+                None
+            })
         }
-        crate::content::bounded::BoundedReadStatus::Cancelled
-        | crate::content::bounded::BoundedReadStatus::Deadline => Ok(Some(visitor_quit)),
+        crate::content::bounded::BoundedReadStatus::Cancelled => Ok(Some((
+            Some(crate::report::ScanTermination::Cancelled),
+            visitor_quit,
+        ))),
+        crate::content::bounded::BoundedReadStatus::Deadline => Ok(Some((
+            Some(crate::report::ScanTermination::Timeout),
+            visitor_quit,
+        ))),
     }
 }
 
