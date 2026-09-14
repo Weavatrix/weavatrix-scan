@@ -30,6 +30,10 @@ fn paged_session_reads_reject_a_replaced_generation() {
         })
         .unwrap();
     assert_eq!(session.generation(), 2);
+    assert_eq!(
+        session.last_update_reason(),
+        Some(WatchUpdateReason::Incremental)
+    );
     assert!(matches!(
         session.files_page(1, 1, 2),
         Err(Error::StaleSnapshot {
