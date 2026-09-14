@@ -39,6 +39,14 @@ impl Scanner {
 
     /// Collects sorted relative paths without building a portable manifest.
     ///
+    /// Selection follows [`Self::scan`]: ignore files, standard skips,
+    /// extensions, and hidden-file policy. The walk does not collect sizes,
+    /// hashes, revision, or skip evidence, and it does not apply
+    /// `max_file_bytes`.
+    ///
+    /// Prefer this over mapping `files` out of a metadata-only report when
+    /// the consumer only needs names.
+    ///
     /// # Errors
     ///
     /// Returns the same root and I/O errors as [`Self::scan`]. Cancel and

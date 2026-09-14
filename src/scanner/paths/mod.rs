@@ -8,15 +8,29 @@ use walk::{discover_parallel, discover_serial};
 /// Collects sorted repository-relative paths without building a manifest.
 ///
 /// Selection matches [`super::scan_repository`]: ignore rules, standard skips,
-/// extensions, and hidden-file policy still apply. File sizes, hashes,
-/// revision, descriptor, and skip evidence are not collected, and
-/// `max_file_bytes` is not applied.
+/// extensions, and hidden-file policy still apply. Paths use `/` on every
+/// platform. File sizes, hashes, revision, descriptor, and skip evidence are
+/// not collected, and `max_file_bytes` is not applied.
 ///
 /// # Errors
 ///
 /// Returns an error when the root cannot be resolved or a local I/O failure
 /// occurs under `ErrorPolicy::Abort`. Cooperative cancel and timeout stop the
 /// walk with an interrupted I/O error.
+///
+/// # Examples
+///
+/// ```
+/// use weavatrix_scan::{ScanOptions, Scanner, scan_repository_paths};
+///
+/// let defaults = scan_repository_paths(".")?;
+/// let rust_only = Scanner::new(".")
+///     .options(ScanOptions::default().with_extensions(["rs"]))
+///     .scan_paths()?;
+/// assert!(defaults.iter().all(|path| !path.contains('\\')));
+/// assert!(rust_only.iter().all(|path| path.ends_with(".rs")));
+/// # Ok::<(), weavatrix_scan::Error>(())
+/// ```
 pub fn scan_repository_paths(root: impl AsRef<Path>) -> Result<Vec<String>> {
     scan_repository_paths_with_runtime(
         root.as_ref(),

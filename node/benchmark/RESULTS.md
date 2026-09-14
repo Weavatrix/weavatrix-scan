@@ -18,7 +18,7 @@ row had to prove equal before it was allowed to be timed.
 | Memory | 47.5 GiB |
 | Rounds | 7 measured, after 2 warm-ups, alternating order, median reported |
 | Independent runs | 3 per suite, each in a fresh process; the table shows the median and the spread |
-| Package | weavatrix-scan 0.5.2 |
+| Package | weavatrix-scan 0.5.3 |
 
 ## node 24.15.0
 
@@ -26,8 +26,8 @@ Corpus: `[{"files":20000,"bytes":20000}]`
 
 | Contract | Parity | Weavatrix | Competitor | Result |
 | --- | --- | ---: | ---: | ---: |
-| sorted relative paths | identical path array | 21.447 ms | 28.868 ms | Weavatrix 1.27x faster (1.01x–1.35x) |
-| sorted relative paths plus byte sizes | identical {relative, bytes} array | 32.158 ms | 242.987 ms | Weavatrix 7.79x faster (7.18x–7.90x) |
+| sorted relative paths | identical path array | 22.473 ms | 29.382 ms | Weavatrix 1.33x faster (1.31x–1.50x) |
+| sorted relative paths plus byte sizes | identical {relative, bytes} array | 46.590 ms | 380.108 ms | Weavatrix 8.25x faster (7.92x–8.32x) |
 
 ## bun 1.3.14
 
@@ -35,8 +35,8 @@ Corpus: `[{"files":20000,"bytes":20000}]`
 
 | Contract | Parity | Weavatrix | Competitor | Result |
 | --- | --- | ---: | ---: | ---: |
-| sorted relative paths | identical path array | 14.016 ms | 15.208 ms | Weavatrix 1.07x faster (1.07x–1.09x) |
-| sorted relative paths plus byte sizes | identical {relative, bytes} array | 27.700 ms | 282.242 ms | Weavatrix 10.48x faster (9.48x–10.93x) |
+| sorted relative paths | identical path array | 19.928 ms | 30.582 ms | Weavatrix 1.53x faster (1.52x–1.74x) |
+| sorted relative paths plus byte sizes | identical {relative, bytes} array | 48.320 ms | 664.136 ms | Weavatrix 12.20x faster (11.80x–13.74x) |
 
 ## Reading these rows
 

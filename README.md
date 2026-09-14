@@ -222,17 +222,121 @@ npm install weavatrix-scan
 ```js
 const { scanPaths, scanRepository } = require('weavatrix-scan')
 
+const paths = await scanPaths(process.cwd(), { extensions: ['js', 'ts', 'rs'] })
 const report = await scanRepository(process.cwd(), {
   extensions: ['js', 'ts', 'rs'],
   selectedFilesOnly: true,
 })
-const paths = await scanPaths(process.cwd())
 ```
 
-`scanPaths` / `scanPathsSync` return sorted relative paths as a `string[]` from
-native code. They apply the same ignore and extension selection as a scan, but
-do not build, hash, or JSON-encode a portable report. Use `scanRepository` when
-the caller needs sizes, hashes, revision, or skip evidence.
+The package is CommonJS. ESM and TypeScript import the same bindings:
+
+```ts
+import { scanPaths, scanPathsSync, scanRepository } from 'weavatrix-scan'
+```
+
+### Which Node API to use
+
+| Need | Call |
+| --- | --- |
+| Sorted relative paths only | `scanPaths` / `scanPathsSync` |
+| Sizes, hashes, `revision`, skip evidence | `scanRepository` / `scanRepositorySync` |
+| Fastest useful manifest (sizes + revision, no hashes) | `scanRepository(..., { metadataOnly: true, selectedFilesOnly: true })` |
+| Compact retained manifest | `scanRepository(..., { compact: true })` |
+| Watcher updates on one live snapshot | `ScanSession` |
+| Raw native directory entries (no ignore, no `/` paths) | Rust `Walker` — not exposed on npm |
+
+### Working with `scanPaths`
+
+`scanPaths` / `scanPathsSync` return a sorted `string[]` of repository-relative
+paths from native code. The array is the product: there is no report object,
+no JSON decode of a manifest, and no per-file metadata.
+
+Use it when the next step only needs names — feeding an indexer, listing
+sources for another tool, or comparing two trees. Reach for
+`scanRepository` as soon as you need sizes, hashes, `revision`, skip
+evidence, or a cacheable portable report.
+
+**What the list contains.** Paths use `/` on every platform, including
+Windows. Order is deterministic (the native sort; equivalent to
+`localeCompare`). The default selection matches a full scan: repository
+ignore files (`.gitignore`, `.ignore`, `.weavatrixignore`), `standardSkips`
+(`node_modules`, `target`, `dist`, and the other vendor dirs listed under
+[Configuration](#configuration)), and any `extensions` / `overrideRules`
+you pass. Hidden files are included unless `skipHidden: true`.
+
+**What it does not do.** It does not read file contents, hash, detect
+binaries, compute `revision` or `descriptor`, or record why a path was
+skipped. `metadataOnly`, `selectedFilesOnly`, `compact`, `hashFileContents`,
+`maxFileBytes`, and `maxTotalBytes` have no effect: there is no manifest and
+no size collection. A file that a full scan would skip as oversized still
+appears here.
+
+**Options that apply.**
+
+| Option | Effect on `scanPaths` |
+| --- | --- |
+| `extensions` | Keep only these extensions (no leading dot). |
+| `overrideRules` | Gitignore-syntax include/exclude above discovered ignore files. |
+| `ignorePolicy` | `repository` (default), `none`, or `gitCompatible`. |
+| `standardSkips` | `true` (default) skips vendor/generated directories. |
+| `skipHidden` | Skip dotfiles and dot-directories. |
+| `maxDepth` / `parallelism` | Traversal bounds and worker count. |
+| `maxEntries` | May return a shorter list **without throwing**. |
+| `signal` | Cancels the walk; the call **throws** (`GenericFailure`). |
+| `metadataOnly`, `compact`, `hashFileContents`, `maxFileBytes`, `maxTotalBytes` | Ignored. |
+
+**Sync vs async.** `scanPaths` runs on the Node-API worker pool and leaves
+the event loop free — use it from servers and watchers. `scanPathsSync`
+blocks the calling thread — use it in CLIs and startup scripts. Both
+accept the same options.
+
+```js
+const path = require('node:path')
+const { scanPaths, scanPathsSync } = require('weavatrix-scan')
+
+const root = process.cwd()
+
+// Default: ignore-aware, standard vendor skips, every regular file.
+const all = scanPathsSync(root)
+
+// Same selection a TypeScript indexer would want.
+const sources = await scanPaths(root, {
+  extensions: ['ts', 'tsx', 'js', 'jsx'],
+  skipHidden: true,
+})
+
+// Re-include a vendor tree that standardSkips would drop.
+const withVendorTypes = scanPathsSync(root, {
+  extensions: ['d.ts'],
+  overrideRules: ['!node_modules/@types/**'],
+})
+
+// Raw tree, no gitignore and no node_modules skip. Closer to a bare walker.
+const raw = scanPathsSync(root, {
+  ignorePolicy: 'none',
+  standardSkips: false,
+})
+
+// Relatives stay portable. Join only when a host API needs a native path.
+const absolute = sources.map((relative) => path.join(root, ...relative.split('/')))
+
+// Cooperative cancel. Unlike scanRepository, this rejects instead of
+// returning complete: false.
+const controller = new AbortController()
+const pending = scanPaths(root, { signal: controller.signal })
+controller.abort()
+await pending.catch((error) => {
+  // error.code === 'GenericFailure' — interrupted ("scan cancelled")
+})
+```
+
+On a tree that does not hit size limits,
+`scanPathsSync(root)` equals
+`scanRepositorySync(root, { metadataOnly: true, selectedFilesOnly: true })
+  .files.map((file) => file.relative)`.
+Prefer `scanPaths` for that set: it does not allocate the report or parse
+JSON.
 
 The single self-contained package supports Node.js 18+ and Bun 1.4+ and carries
 native binaries for Windows, macOS, and glibc Linux on x64 and arm64 without
@@ -240,9 +344,9 @@ creating public platform-package names. The
 [Node/Bun benchmark report](node/benchmark/RESULTS.md) is generated by the
 [weavatrix-benchmarks](https://github.com/Weavatrix/weavatrix-benchmarks)
 harness. Medians of three independent runs on a 20,000-file fixture:
-`scanPaths` is **1.27x** (Node, 1.01x–1.35x) and **1.07x** (Bun, 1.07x–1.09x)
+`scanPaths` is **1.33x** (Node, 1.31x–1.50x) and **1.53x** (Bun, 1.52x–1.74x)
 faster than `fdir` on sorted relative paths. The path-plus-size
-`scanRepository` contract is **7.79x** (Node) and **10.48x** (Bun) faster
+`scanRepository` contract is **8.25x** (Node) and **12.20x** (Bun) faster
 because `fdir` needs one `statSync` per path. This npm library is a separately
 released Scan product; it does not belong to Online or MCP.
 
@@ -273,18 +377,68 @@ for skipped in &report.skipped {
 # Ok::<(), weavatrix_scan::Error>(())
 ```
 
-For a sorted path list without a manifest, use `scan_paths`:
+### Working with `scan_paths`
+
+`scan_repository_paths` and `Scanner::scan_paths` return `Vec<String>`:
+forward-slash relative paths, sorted. Use the free function for defaults;
+use `Scanner` when you need options, a custom runtime, or the same builder
+you already pass to `scan`.
+
+Selection is the same as `scan_repository` (ignore files, standard skips,
+extensions, overrides, hidden policy). The walk does not collect sizes,
+hashes, revision, or skip evidence, and it does not apply `max_file_bytes`
+or `max_total_bytes`. `max_entries` can return a shorter list without an
+error. Cancel and timeout return interrupted I/O instead of a partial
+report.
+
+| Need | Call |
+| --- | --- |
+| Sorted relative paths | `scan_repository_paths` / `Scanner::scan_paths` |
+| Manifest (sizes, hashes, revision, skips) | `Scanner::scan` / `scan_compact` |
+| Fastest useful manifest | `metadata_only()` + `selected_files_only()` |
+| Raw native `PathBuf` entries, no ignore | `Walker` |
 
 ```rust
-use weavatrix_scan::{ScanOptions, Scanner};
+use weavatrix_scan::{
+    CancellationToken, IgnorePolicy, ScanOptions, Scanner, StandardSkips,
+    scan_repository_paths,
+};
 
-let paths = Scanner::new(".")
-    .options(ScanOptions::default().with_extensions(["rs", "go", "ts"]))
+// Default: ignore-aware, vendor directories skipped.
+let all = scan_repository_paths(".")?;
+
+let rust_sources = Scanner::new(".")
+    .options(ScanOptions::default().with_extensions(["rs"]))
     .scan_paths()?;
+
+// Re-include a path that ignore or standard skips would drop.
+let with_types = Scanner::new(".")
+    .options(
+        ScanOptions::default()
+            .with_extensions(["d.ts"])
+            .with_override_rules(["!node_modules/@types/**"]),
+    )
+    .scan_paths()?;
+
+// Raw tree: no gitignore, no node_modules skip.
+let raw = Scanner::new(".")
+    .options(
+        ScanOptions::default()
+            .with_ignore_policy(IgnorePolicy::none())
+            .with_standard_skips(StandardSkips::Disabled),
+    )
+    .scan_paths()?;
+
+let token = CancellationToken::new();
+let cancelled = Scanner::new(".")
+    .options(ScanOptions::default().with_cancellation(token.clone()));
+token.cancel();
+assert!(cancelled.scan_paths().is_err());
 # Ok::<(), weavatrix_scan::Error>(())
 ```
 
-For the fastest path-only **manifest**, disable content reads:
+`scan_paths` is the cheap selected-file list. For the fastest path-only
+**manifest** (sizes, revision, no content hashes), disable content reads:
 
 ```rust
 use weavatrix_scan::{ScanOptions, Scanner};
@@ -843,7 +997,7 @@ from "unreadable" or "outside the repository."
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `max_file_bytes` | 1,500,000 | Reject oversized source candidates |
+| `max_file_bytes` | 1,500,000 | Reject oversized source candidates. Not applied by `scan_paths`. |
 | `extensions` | Empty | Empty accepts every extension |
 | `file_types` | Empty | Named file-name/repository-relative glob groups |
 | `ignore_files` | `.gitignore`, `.ignore`, `.weavatrixignore` | Hierarchical local ignore files |

@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-14
+
+- Document how to use `scanPaths` / `scan_paths`: which API to pick, which
+  options apply, cancel vs incomplete reports, and how relatives join back
+  to host paths.
+
 ## 0.5.2 - 2026-09-14
 
 - Add `scan_repository_paths` / `Scanner::scan_paths` and Node `scanPaths` /

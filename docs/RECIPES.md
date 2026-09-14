@@ -1,5 +1,31 @@
 # Scan recipes
 
+## Path list without a manifest
+
+`scan_repository_paths` / `Scanner::scan_paths` (Node: `scanPaths` /
+`scanPathsSync`) return sorted relative paths only. Use this when the
+consumer does not need sizes, hashes, revision, or skip evidence.
+
+```rust
+use weavatrix_scan::{ScanOptions, Scanner};
+
+let paths = Scanner::new(".")
+    .options(ScanOptions::default().with_extensions(["rs", "ts"]))
+    .scan_paths()?;
+# Ok::<(), weavatrix_scan::Error>(())
+```
+
+```js
+const { scanPathsSync } = require('weavatrix-scan')
+
+const paths = scanPathsSync(process.cwd(), { extensions: ['rs', 'ts'] })
+```
+
+The selected set matches `scan` / `scanRepository` on the same options,
+except size limits are not applied. Cancel and timeout are errors, not an
+incomplete report. Join relatives with the host path API only when you need
+a native filesystem path.
+
 ## Three jobs
 
 1. **One-shot manifest.** `Scanner::scan` or `scan_compact` produces a

@@ -3,9 +3,10 @@
 A deterministic, path-safe repository scanner — written in Rust, exposed to
 Node.js and Bun through Node-API.
 
-Not a directory walker. It produces a manifest: normalized paths, byte sizes,
-optional content hashes, an aggregate revision, ignore-rule provenance, typed
-evidence for everything it skipped, and hard bounds it will not exceed. It
+The default API produces a manifest: normalized paths, byte sizes, optional
+content hashes, an aggregate revision, ignore-rule provenance, typed evidence
+for everything it skipped, and hard bounds it will not exceed. `scanPaths`
+is the ignore-aware sorted path list when you do not need that report. It
 executes no repository code.
 
 ```console
@@ -29,6 +30,19 @@ report.files           // [{ relative, bytes, content_hash?, binary_checked }]
 report.skipped         // why each excluded entry was excluded
 report.complete        // false when a bound stopped the scan
 ```
+
+The package is CommonJS. ESM and TypeScript import the same bindings:
+
+```ts
+import { scanPaths, scanPathsSync, scanRepository } from 'weavatrix-scan'
+```
+
+| Need | Call |
+| --- | --- |
+| Sorted relative paths only | `scanPaths` / `scanPathsSync` |
+| Sizes, hashes, `revision`, skip evidence | `scanRepository` / `scanRepositorySync` |
+| Fastest useful manifest | `scanRepository(..., { metadataOnly: true, selectedFilesOnly: true })` |
+| Watcher updates on one live snapshot | `ScanSession` |
 
 ---
 
@@ -54,10 +68,68 @@ top can be cached, diffed, or trusted. So the report carries:
 
 Sorted repository-relative paths from native code. Same ignore and extension
 selection as a scan, without building or JSON-encoding a portable report.
+Runs on the Node-API worker pool.
 
 ### `scanPathsSync(root, options?) → string[]`
 
 The blocking form of `scanPaths`.
+
+#### How to use it
+
+```js
+const path = require('node:path')
+const { scanPaths, scanPathsSync } = require('weavatrix-scan')
+
+const root = process.cwd()
+
+// Ignore-aware, vendor dirs skipped, every regular file.
+const all = scanPathsSync(root)
+
+const sources = await scanPaths(root, {
+  extensions: ['ts', 'tsx', 'js', 'jsx'],
+  skipHidden: true,
+})
+
+// Re-include a vendor tree that standardSkips would drop.
+const dts = scanPathsSync(root, {
+  extensions: ['d.ts'],
+  overrideRules: ['!node_modules/@types/**'],
+})
+
+// No gitignore, no node_modules skip — closer to a bare walker.
+const raw = scanPathsSync(root, {
+  ignorePolicy: 'none',
+  standardSkips: false,
+})
+
+const absolute = sources.map((relative) => path.join(root, ...relative.split('/')))
+
+const controller = new AbortController()
+const pending = scanPaths(root, { signal: controller.signal })
+controller.abort()
+await pending.catch((error) => {
+  // error.code === 'GenericFailure'
+})
+```
+
+- Paths use `/` on every platform and are already sorted.
+- Default selection matches `scanRepository`: `.gitignore` (and the
+  configured ignore set), `standardSkips`, plus any `extensions` or
+  `overrideRules`.
+- It does **not** read contents, hash, compute `revision`, or explain skips.
+- `metadataOnly`, `selectedFilesOnly`, `compact`, `hashFileContents`,
+  `maxFileBytes`, and `maxTotalBytes` are ignored. Oversized files still
+  appear.
+- `signal` cancels the walk and the promise rejects. `scanRepository` instead
+  returns `complete: false`.
+- `maxEntries` / `maxDepth` / `parallelism` still apply. Hitting `maxEntries`
+  can return a shorter list without throwing.
+- Join with `path.join(root, ...relative.split('/'))` only when a host API
+  needs a native path. Keep the `/` form for anything you persist or compare.
+
+On a tree that does not hit size limits, `scanPathsSync(root)` equals
+`scanRepositorySync(root, { metadataOnly: true, selectedFilesOnly: true })
+  .files.map((file) => file.relative)`.
 
 ### `scanRepository(root, options?) → Promise<ScanReport>`
 
@@ -103,7 +175,7 @@ musl is unsupported.
 | `ignorePolicy` | `string` | `repository` | `repository`, `none`, or `gitCompatible`. |
 | `hashFileContents` | `boolean` | `true` | Set `false` for metadata-only consumers. |
 | `compact` | `boolean` | `false` | Return a compact manifest (`files`, `revision`, `complete`, `termination`) instead of the portable report. Use `exportScanCache()` for the local hash cache. |
-| `signal` | `AbortSignal` | — | Cancels the native scan. The report then has an explicit `termination`. |
+| `signal` | `AbortSignal` | — | Cancels the native scan. `scanRepository` then has an explicit `termination`; `scanPaths` throws. |
 | `maxFileBytes` | `number` | scanner default | Files above this are skipped with typed evidence rather than read. |
 | `maxEntries` | `number` | unbounded | Hard entry bound. Hitting it sets `complete: false` and `termination`. |
 | `maxTotalBytes` | `number` | unbounded | Hard byte bound, same reporting. |
@@ -144,7 +216,7 @@ serialized Rust names.
 | `code` | Cause |
 | --- | --- |
 | `InvalidArg` | Unknown option key, or malformed option JSON. |
-| `GenericFailure` | Root missing, unreadable, or not a directory. |
+| `GenericFailure` | Root missing, unreadable, or not a directory. `scanPaths` also uses this when `signal` cancels or a timeout fires. |
 
 ---
 
@@ -173,8 +245,8 @@ Medians of three independent runs over 20,000 files:
 
 | Contract | Node 24 | Bun 1.3 |
 | --- | ---: | ---: |
-| Sorted relative paths (`scanPaths`) | **1.27x** (1.01–1.35) | **1.07x** (1.07–1.09) |
-| Sorted paths **plus byte sizes** | **7.79x** (7.18–7.90) | **10.48x** (9.48–10.93) |
+| Sorted relative paths (`scanPaths`) | **1.33x** (1.31–1.50) | **1.53x** (1.52–1.74) |
+| Sorted paths **plus byte sizes** | **8.25x** (7.92–8.32) | **12.20x** (11.80–13.74) |
 
 The first row times `scanPaths` against `fdir`: same sorted path array, no
 portable report. The second row is the equal consumer-facing manifest

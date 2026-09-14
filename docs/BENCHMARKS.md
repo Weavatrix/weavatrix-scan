@@ -35,10 +35,13 @@ a deferred export.
 
 `node/benchmark/fdir.mjs` remains a paths and path-plus-size control. The
 paths row times `scanPathsSync` against `fdir`; the size row still times
-`scanRepositorySync` against `fdir` plus `statSync`. Add a
-bounded parallel async `stat` row when comparing `fdir`; `statSync` is not
-the only competitor shape. A 20k one-byte-file fixture is not a content
-workload. A million-file Windows result does not rank Linux.
+`scanRepositorySync` against `fdir` plus `statSync`. Official numbers live
+in `node/benchmark/RESULTS.md` and come from
+[weavatrix-benchmarks](https://github.com/Weavatrix/weavatrix-benchmarks)
+via `node export.mjs` after `--suite=scan`. Add a bounded parallel async
+`stat` row when comparing `fdir`; `statSync` is not the only competitor
+shape. A 20k one-byte-file fixture is not a content workload. A million-file
+Windows result does not rank Linux.
 
 Published npm targets are glibc Linux, Windows MSVC, and Apple Darwin.
 musl is unsupported; `scanDiagnostics()` reports that explicitly.
