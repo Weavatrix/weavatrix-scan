@@ -176,10 +176,12 @@ jobs:
           [[ -n "${NODE_AUTH_TOKEN:-}" ]] || { echo "NPM_TOKEN is not configured" >&2; exit 1; }
           PACKAGE="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
-          npm config set provenance true
           if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
             echo "$PACKAGE@$VERSION is already published"
           else
+            # Match weavatrix-md: org NPM_TOKEN via setup-node, provenance on the
+            # publish flag only. `npm config set provenance` rewrites the user
+            # npmrc and has produced a 404 PUT after a signed provenance statement.
             npm publish --ignore-scripts --provenance --access public
           fi
       - name: Verify registry identity, tarball, and loading
