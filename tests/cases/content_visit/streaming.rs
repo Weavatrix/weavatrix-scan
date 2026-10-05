@@ -40,7 +40,7 @@ fn streaming_content_visit_omits_manifest_revision_but_keeps_byte_evidence() {
         .unwrap();
 
     assert_eq!(report.mode, ContentVisitMode::Streaming);
-    assert!(report.revision.is_empty());
+    assert_eq!(report.revision, "");
     assert_eq!(report.discovered, 2);
     assert_eq!(report.completed, 2);
     assert_eq!(report.cache.content_reads, 2);
@@ -96,7 +96,7 @@ fn buffered_parallel_discovery_preserves_streaming_content_results() {
     assert_eq!(parallel.completed, streaming.completed);
     assert_eq!(parallel.bytes_emitted, streaming.bytes_emitted);
     assert_eq!(parallel.mode, ContentVisitMode::Streaming);
-    assert!(parallel.revision.is_empty());
+    assert_eq!(parallel.revision, "");
 }
 
 #[test]

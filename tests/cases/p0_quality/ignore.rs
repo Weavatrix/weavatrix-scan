@@ -138,7 +138,7 @@ fn ignore_policy_constructors_and_default_matcher_are_usable() {
     assert!(!none.custom_ignore);
     assert!(!none.git_exclude);
     assert!(!none.git_global);
-    assert!(none.explicit_files.is_empty());
+    assert_eq!(none.explicit_files.len(), 0);
     let options = ScanOptions::default().with_standard_skips(StandardSkips::Disabled);
     assert_eq!(options.standard_skips, StandardSkips::Disabled);
 

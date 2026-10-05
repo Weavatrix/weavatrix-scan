@@ -43,7 +43,7 @@ fn custom_ignore_uppercase_extensions_and_default_entrypoint_work() {
 
     let empty = Fixture::new("weavatrix-scan-empty");
     let report = scan_repository(&empty.root).unwrap();
-    assert!(report.files.is_empty());
+    assert_eq!(report.files.len(), 0);
     assert!(!report.revision.is_empty());
 }
 

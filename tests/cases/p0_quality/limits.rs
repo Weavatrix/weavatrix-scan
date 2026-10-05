@@ -24,7 +24,7 @@ fn scan_limits_and_cancellation_return_typed_partial_reports() {
         .scan()
         .unwrap();
     assert_eq!(bytes.termination, Some(ScanTermination::MaxTotalBytes));
-    assert!(bytes.files.is_empty());
+    assert_eq!(bytes.files.len(), 0);
 
     let timeout = Scanner::new(&fixture.root)
         .options(ScanOptions::default().with_timeout(Some(Duration::ZERO)))
@@ -64,5 +64,5 @@ fn scan_limits_and_cancellation_return_typed_partial_reports() {
         selected_only.termination,
         Some(ScanTermination::MaxTotalBytes)
     );
-    assert!(selected_only.skipped.is_empty());
+    assert_eq!(selected_only.skipped.len(), 0);
 }

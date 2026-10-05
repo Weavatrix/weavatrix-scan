@@ -134,6 +134,6 @@ mod tests {
         assert!(!policy.custom_ignore);
         assert!(!policy.git_exclude);
         assert!(!policy.git_global);
-        assert!(policy.explicit_files.is_empty());
+        assert_eq!(policy.explicit_files.len(), 0);
     }
 }

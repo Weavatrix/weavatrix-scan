@@ -268,8 +268,8 @@ fn repository_and_source_helpers_cover_portable_edge_cases() {
         false,
     );
     assert!(rules.layers.iter().all(Option::is_none));
-    assert!(errors.is_empty());
-    assert!(evidence.is_empty());
+    assert_eq!(errors.len(), 0);
+    assert_eq!(evidence.len(), 0);
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -47,7 +47,7 @@ fn compact_manifest_keeps_selected_files_and_termination() {
     assert!(compact.termination.is_none());
     assert_eq!(compact.revision, report.revision);
     let cache = report.to_cache();
-    assert!(cache.entries.is_empty());
+    assert_eq!(cache.entries.len(), 0);
 }
 
 #[test]

@@ -48,7 +48,7 @@ fn local_source_switches_and_require_git_are_independent() {
         )
         .scan()
         .unwrap();
-    assert!(inside_git.files.is_empty());
+    assert_eq!(inside_git.files.len(), 0);
     assert!(
         inside_git
             .ignore_sources

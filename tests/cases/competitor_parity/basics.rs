@@ -86,7 +86,7 @@ fn low_level_walkers_match_walkdir_and_jwalk_on_raw_entries() {
         .with_parallelism(8)
         .walk()
         .unwrap();
-    assert!(parallel.errors.is_empty());
+    assert_eq!(parallel.errors.len(), 0);
     let parallel = parallel
         .entries
         .into_iter()

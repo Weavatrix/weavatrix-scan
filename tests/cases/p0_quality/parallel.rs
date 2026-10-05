@@ -35,7 +35,7 @@ fn parallel_visit_streams_prunes_and_honors_cancellation() {
         })
         .unwrap();
 
-    assert!(report.errors.is_empty());
+    assert_eq!(report.errors.len(), 0);
     assert!(!report.quit);
     assert!(
         !visited
@@ -80,7 +80,7 @@ fn parallel_visit_covers_quit_same_filesystem_serial_and_error_policies() {
             WalkControl::Continue
         })
         .unwrap();
-    assert!(report.errors.is_empty());
+    assert_eq!(report.errors.len(), 0);
     assert_eq!(
         usize::try_from(report.visited).unwrap(),
         same_file_system.load(Ordering::Relaxed)
@@ -105,7 +105,7 @@ fn parallel_visit_covers_quit_same_filesystem_serial_and_error_policies() {
             WalkEvent::Error(_) => WalkControl::Continue,
         })
         .unwrap();
-    assert!(serial.errors.is_empty());
+    assert_eq!(serial.errors.len(), 0);
     assert!(
         !serial_paths
             .lock()

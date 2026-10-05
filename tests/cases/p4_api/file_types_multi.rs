@@ -60,7 +60,7 @@ fn built_in_catalog_is_a_strict_superset_of_ignore_defaults() {
         .map(ignore::types::FileTypeDef::name)
         .filter(|name| !ours.contains(name))
         .collect::<Vec<_>>();
-    assert!(missing.is_empty(), "missing ignore file types: {missing:?}");
+    assert_eq!(missing.len(), 0, "missing ignore file types: {missing:?}");
     assert!(ours.len() > upstream.len());
     assert!(ours.names().is_sorted());
 

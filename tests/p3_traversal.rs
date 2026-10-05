@@ -261,7 +261,7 @@ fn followed_links_remain_parallel_and_cycle_safe() {
 
     assert!(workers.lock().unwrap().len() > 1);
     assert!(report.visited < 200);
-    assert!(report.errors.is_empty());
+    assert_eq!(report.errors.len(), 0);
 }
 
 #[cfg(unix)]

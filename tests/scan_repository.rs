@@ -55,7 +55,7 @@ fn reports_oversized_and_binary_files_without_reading_them_as_sources() {
     options.max_file_bytes = 4;
     let report = Scanner::new(&fixture.root).options(options).scan().unwrap();
 
-    assert!(report.files.is_empty());
+    assert_eq!(report.files.len(), 0);
     assert!(
         report
             .skipped

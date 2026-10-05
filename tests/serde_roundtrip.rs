@@ -36,7 +36,7 @@ fn scan_report_round_trips_through_json() {
     }
     let legacy: weavatrix_scan::ScanReport = serde_json::from_value(legacy).unwrap();
     assert!(legacy.complete);
-    assert!(legacy.ignore_sources.is_empty());
+    assert_eq!(legacy.ignore_sources.len(), 0);
     assert_eq!(legacy.termination, None);
     assert!(legacy.portable);
     assert_eq!(legacy.cache, weavatrix_scan::ScanCacheStats::default());

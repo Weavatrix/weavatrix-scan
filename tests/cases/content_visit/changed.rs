@@ -201,7 +201,7 @@ fn changed_streaming_visit_parallelizes_and_filters_changed_paths() {
         panic!("safe file-only plan unexpectedly required a full scan");
     };
     assert_eq!(report.content.mode, ContentVisitMode::Streaming);
-    assert!(report.content.revision.is_empty());
+    assert_eq!(report.content.revision, "");
     assert_eq!(report.content.discovered, 4);
     assert_eq!(report.content.completed, 4);
     assert_eq!(report.removed, ["removed.rs"]);

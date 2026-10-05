@@ -45,7 +45,7 @@ fn public_option_and_entry_contracts_are_exercised() {
         .scan()
         .unwrap();
     assert_eq!(report.files[0].relative, "source.RS");
-    assert!(report.skipped.is_empty());
+    assert_eq!(report.skipped.len(), 0);
 
     let unfiltered = Scanner::new(&fixture.root)
         .options(ScanOptions::default().metadata_only())
@@ -75,7 +75,7 @@ fn parallel_modes_cover_serial_empty_and_same_filesystem_paths() {
         .with_parallelism(3)
         .walk()
         .unwrap();
-    assert!(same_fs.errors.is_empty());
+    assert_eq!(same_fs.errors.len(), 0);
     assert!(
         same_fs
             .entries
@@ -87,7 +87,7 @@ fn parallel_modes_cover_serial_empty_and_same_filesystem_paths() {
         .options(WalkOptions::default().with_follow_links(true))
         .walk()
         .unwrap();
-    assert!(serial.errors.is_empty());
+    assert_eq!(serial.errors.len(), 0);
 
     let empty = Fixture::new("weavatrix-parallel-empty");
     let shallow = ParallelWalker::new(&empty.root)

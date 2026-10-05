@@ -24,7 +24,7 @@ fn content_inspection_honors_cancel_timeout_and_evidence_modes() {
     )
     .unwrap();
     assert_eq!(cancelled.termination, Some(ScanTermination::Cancelled));
-    assert!(cancelled.files.is_empty());
+    assert_eq!(cancelled.files.len(), 0);
     assert_eq!(cancelled.skipped.len(), 2);
 
     let timeout = inspect_files(
@@ -46,7 +46,7 @@ fn content_inspection_honors_cancel_timeout_and_evidence_modes() {
         None,
     )
     .unwrap();
-    assert!(selected.skipped.is_empty());
+    assert_eq!(selected.skipped.len(), 0);
 
     assert_eq!(termination_code(ScanTermination::MaxEntries), 0);
     assert_eq!(termination_code(ScanTermination::MaxTotalBytes), 0);
@@ -65,7 +65,7 @@ fn content_read_errors_continue_or_abort_in_both_read_modes() {
         None,
     )
     .unwrap();
-    assert!(continued.files.is_empty());
+    assert_eq!(continued.files.len(), 0);
     assert_eq!(continued.warnings.len(), 1);
     assert_eq!(continued.skipped[0].kind, SkipKind::IoError);
 
@@ -75,7 +75,7 @@ fn content_read_errors_continue_or_abort_in_both_read_modes() {
     };
     let continued =
         inspect_files(vec![missing.clone()], &detect_only, Instant::now(), None).unwrap();
-    assert!(continued.files.is_empty());
+    assert_eq!(continued.files.len(), 0);
     assert_eq!(continued.warnings.len(), 1);
 
     let aborted = inspect_files(
@@ -103,7 +103,7 @@ fn content_changes_between_discovery_and_read_are_typed_or_abort() {
         None,
     )
     .unwrap();
-    assert!(continued.files.is_empty());
+    assert_eq!(continued.files.len(), 0);
     assert_eq!(continued.skipped[0].kind, SkipKind::ConcurrentModification);
     assert_eq!(continued.warnings.len(), 1);
     assert_eq!(continued.cache.content_reads, 1);

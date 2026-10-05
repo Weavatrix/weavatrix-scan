@@ -152,14 +152,14 @@ fn watcher_adapter_coalesces_safe_relative_cache_invalidations() {
     assert!(!plan.full_rescan);
     assert_eq!(plan.rejected_events, 2);
     assert_eq!(cache.apply_watch_plan(&plan), 2);
-    assert!(cache.entries.is_empty());
+    assert_eq!(cache.entries.len(), 0);
 
     let mut cache = report.to_cache();
     let selection_change =
         adapter.plan([WatchEvent::new("nested/.gitignore", WatchEventKind::Modify)]);
     assert!(selection_change.full_rescan);
     assert_eq!(cache.apply_watch_plan(&selection_change), 2);
-    assert!(cache.entries.is_empty());
+    assert_eq!(cache.entries.len(), 0);
 }
 
 #[cfg(unix)]

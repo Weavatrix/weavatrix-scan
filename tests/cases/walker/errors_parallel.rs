@@ -77,7 +77,7 @@ fn parallel_walker_matches_serial_paths_on_a_wide_tree() {
         .with_parallelism(8)
         .walk()
         .unwrap();
-    assert!(parallel.errors.is_empty());
+    assert_eq!(parallel.errors.len(), 0);
     let parallel = parallel
         .entries
         .iter()
@@ -154,6 +154,6 @@ fn dynamic_frontier_uses_multiple_workers_below_one_root_directory() {
         })
         .unwrap();
 
-    assert!(report.errors.is_empty());
+    assert_eq!(report.errors.len(), 0);
     assert!(workers.lock().unwrap().len() > 1);
 }
