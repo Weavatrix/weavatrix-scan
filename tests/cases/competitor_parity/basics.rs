@@ -13,7 +13,7 @@ fn matches_ignore_crate_for_text_source_selection_when_policies_align() {
     let ignore_files = ignore_crate_files(&fixture.root, &extensions);
 
     assert_eq!(ours_files, ignore_files);
-    assert!(!ours.revision.is_empty());
+    assert_ne!(ours.revision, "");
     assert!(
         ours.skipped
             .iter()

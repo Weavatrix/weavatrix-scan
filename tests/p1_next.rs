@@ -172,7 +172,7 @@ fn scan_into_is_ordered_and_applies_synchronous_backpressure() {
     assert!(result.stopped);
     assert_eq!(result.selected, 2);
     assert!(!result.complete);
-    assert!(!result.revision.is_empty());
+    assert_ne!(result.revision, "");
 
     let options = ScanOptions::default()
         .with_extensions(["rs"])

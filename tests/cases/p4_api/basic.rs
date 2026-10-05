@@ -178,5 +178,5 @@ fn compact_manifest_matches_full_manifest_without_absolute_path_duplication() {
     );
 
     let default_compact = scan_repository_compact(&fixture.root).unwrap();
-    assert!(!default_compact.files.is_empty());
+    assert_ne!(default_compact.files.len(), 0);
 }

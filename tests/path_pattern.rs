@@ -88,7 +88,7 @@ fn malformed_patterns_report_the_failed_syntax_position() {
         let error = PathPattern::new(source).unwrap_err();
         assert_eq!(error.kind(), expected_kind, "pattern {source:?}");
         assert_eq!(error.position(), expected_position, "pattern {source:?}");
-        assert!(!error.to_string().is_empty(), "pattern {source:?}");
+        assert_ne!(error.to_string(), "", "pattern {source:?}");
     }
 }
 

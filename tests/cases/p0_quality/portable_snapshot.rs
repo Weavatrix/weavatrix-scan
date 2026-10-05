@@ -45,7 +45,7 @@ fn portable_report_removes_host_paths_and_free_form_diagnostics() {
         None
     );
     assert!(portable.skipped.last().unwrap().detail_hash.is_some());
-    assert!(!portable.warnings.last().unwrap().message_hash.is_empty());
+    assert_ne!(portable.warnings.last().unwrap().message_hash, "");
     assert_eq!(portable, report.to_portable());
 }
 
@@ -156,7 +156,7 @@ fn snapshot_errors_and_report_validation_are_explicit() {
         SnapshotReadError::Stale("stale.rs".to_owned()),
     ];
     for error in errors {
-        assert!(!error.to_string().is_empty());
+        assert_ne!(error.to_string(), "");
         assert!(error.source().is_none());
     }
     let io_error = SnapshotReadError::Io {
